@@ -1,5 +1,6 @@
 "use client";
 
+import { WhatNextCard } from "@/components/what-next-card";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
@@ -158,17 +159,6 @@ export function Home({
 
 	return (
 		<div className="relative h-dvh">
-			{/* Window-drag strip (merged chrome, owner 2026-09-17): a dedicated
-			    mask element, deliberately FIRST in the DOM. Electron's app-region
-			    mask resolves by DOM order — a no-drag element subtracts only drag
-			    regions that came EARLIER in the tree — not by z-index, so the
-			    header's old inline drag region (after <main>) re-added itself over
-			    the graph chrome row's carve-out and the buttons dragged the window.
-			    Placed first, every carved control (chrome row, node detail card,
-			    the toggle) comes later and subtracts correctly. Pure mask: it
-			    never needs to receive events — the mask routes the pixels. */}
-			<div className="lh-drag absolute inset-x-0 top-0 h-13" aria-hidden="true" />
-
 			{/* The main view — full-bleed (owner, graph-view round 1): no
 			    padding on any side; it runs from the sidebar to the right edge
 			    and from the bottom to the top, under everything else. With
@@ -195,15 +185,18 @@ export function Home({
 			</main>
 
 			{/* Header floats over the graph — pointer-events-none except the
-			    toggle, so the canvas stays draggable/hoverable around it. Carries
-			    no app-region of its own: the strip's drag comes from the mask
-			    div above, and the toggle's lh-no-drag subtracts from it (it is
-			    later in the tree, so the subtraction sticks). */}
+			    toggle, so the canvas stays draggable/hoverable around it. */}
 			<header className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-2 px-3 py-2">
 				<div className="pointer-events-auto">
 					<SidebarToggle />
 				</div>
 			</header>
+
+			{/* What next across topics (topics wave, 2026-10-26): floats under
+			    the header, left; renders nothing until a topic exists. */}
+			<div className="pointer-events-none absolute left-3 top-14 z-10">
+				<WhatNextCard />
+			</div>
 
 			{/* New session — same floating blob as the chat composer, docked
 			    OVER the graph (no gradient: the graph runs clean under it to the

@@ -71,6 +71,22 @@ export const probeDoneInputSchema = Type.Object({
 	),
 });
 
+/** probe_done in a session started from a topic (topics wave, 2026-10-26):
+ *  the same assessment plus the learner's measured standing on the target
+ *  component, which the topic's evidence log records. */
+export const targetedProbeDoneInputSchema = Type.Object({
+	assessment: probeDoneInputSchema.properties.assessment,
+	targetVerdict: Type.Object(
+		{
+			verdict: Type.Union([Type.Literal("held"), Type.Literal("shaky"), Type.Literal("misconception"), Type.Literal("missing")], {
+				description: "His standing on the TARGET component before teaching: held | shaky | misconception | missing.",
+			}),
+			note: Type.String({ minLength: 1, description: "Floor, ceiling and misconceptions on the target component, from the probe's evidence. Short." }),
+		},
+		{ description: "REQUIRED in this session: his measured standing on the target component (see the session context)." },
+	),
+});
+
 /** Schema ↔ interface lock (the old `satisfies z.ZodType` guarantee): the
  *  declaration and ProbeDoneInput can never drift apart — this only compiles
  *  when the schema's static shape IS the interface. */

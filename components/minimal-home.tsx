@@ -158,13 +158,10 @@ export function MinimalHome({
 			{/* The chrome survivors in the graph view's own places (owner,
 			    2026-10-06): the top-right column — actions row (Chains +
 			    Import, the same 36px band pills), the cost pill BELOW it.
-			    The column carries lh-no-drag EXACTLY like the graph
-			    chrome's (the DOM-order mask law): without it the drag band
-			    swallows the clicks in Electron — the buttons dragged the
-			    window instead. Node search and the render-settings gear are
+			    Node search and the render-settings gear are
 			    canvas things and stay gone; Import ALWAYS renders (the
 			    entry law). */}
-			<div className="lh-no-drag lh-wco-floating absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
+			<div className="absolute right-2 top-2 z-10 flex max-w-[calc(100%-5.5rem)] flex-col items-end gap-2">
 				<div className="flex min-w-0 items-start gap-2">
 					<div className="graph-chrome-fade-in shrink-0 rounded-xl border bg-card/85 px-1 py-[3px] shadow-lg backdrop-blur">
 						<Hint label="Every reasoning chain" side="bottom">
@@ -199,10 +196,8 @@ export function MinimalHome({
 			</div>
 
 			{/* The chain table — the STANDARD overlay, unchanged, behind its
-			    button. LAST CHILD OF THE ROOT, DELIBERATELY (the graph view's
-			    DOM-order drag law): app-region subtraction resolves by DOM
-			    order, so a full-bleed surface covering the drag band must
-			    paint after everything it covers. */}
+			    button. LAST CHILD OF THE ROOT: a full-bleed surface paints
+			    after everything it covers. */}
 			<ChainTableOverlay
 				open={chainsOpen && (snapshot?.propositions.length ?? 0) > 0}
 				nodes={snapshot?.propositions ?? []}

@@ -12,10 +12,10 @@ import { describe, it } from "node:test";
 import { AUTH_KEYS, genericProviderKeyGuard, isKnownAuthKey, maskKey, validateKeyShape } from "../src/core/auth-keys.ts";
 
 describe("the catalog", () => {
-	it("is exactly the three CURATED app-service keys (provider keys live in the provider table)", () => {
+	it("is exactly the CURATED app-service keys (provider keys live in the provider table)", () => {
 		assert.deepEqual(
 			AUTH_KEYS.map((k) => k.id),
-			["DEEPGRAM_API_KEY", "TAVILY_API_KEY", "BRAVE_API_KEY"],
+			["DEEPGRAM_API_KEY", "SEARXNG_URL", "TAVILY_API_KEY", "BRAVE_API_KEY", "ALPHAXIV_API_KEY"],
 		);
 		for (const k of AUTH_KEYS) {
 			assert.ok(k.label.length > 0, `${k.id} has a label`);
@@ -105,5 +105,15 @@ describe("maskKey (plaintext never leaves)", () => {
 
 	it("trims before masking", () => {
 		assert.equal(maskKey("  sk-or-v1-xyzw9  "), "…yzw9");
+	});
+});
+
+describe("SEARXNG_URL shape (a base URL, not a credential)", () => {
+	it("accepts plain http(s) base URLs and refuses everything else", () => {
+		assert.ok(validateKeyShape("SEARXNG_URL", " http://127.0.0.1:9180 ").ok);
+		assert.ok(validateKeyShape("SEARXNG_URL", "https://search.example/searx/").ok);
+		for (const bad of ["127.0.0.1:9180", "ftp://x.example", "http://user:pw@x.example", "http://x.example/?q=1", ""]) {
+			assert.equal(validateKeyShape("SEARXNG_URL", bad).ok, false, bad);
+		}
 	});
 });

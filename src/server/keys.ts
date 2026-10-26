@@ -49,6 +49,7 @@ import {
 	isKnownAuthKey,
 	isProviderEnvVar,
 	maskKey,
+	CONNECTOR_KEY_IDS,
 	validateKeyShape,
 } from "../core/auth-keys.ts";
 import { authStore } from "../store/auth.ts";
@@ -170,6 +171,7 @@ export function resolveKeyStatuses(
 			info: AUTH_KEYS.find((k) => k.id === id) ?? null,
 			present: live !== undefined,
 			masked: live !== undefined ? `${maskKey(live)} (${live.trim().length} chars)` : null,
+			...(live !== undefined && CONNECTOR_KEY_IDS.includes(id) ? { value: live.trim() } : {}),
 			source: isRealEnv ? "env" : live !== undefined ? "file" : "none",
 			shadowedByEnv: isRealEnv && fileValue !== undefined && envValue !== fileValue,
 		});

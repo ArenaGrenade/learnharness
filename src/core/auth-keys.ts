@@ -37,6 +37,12 @@ export const AUTH_KEYS: readonly AuthKeyInfo[] = [
 		docsUrl: "https://console.deepgram.com/",
 	},
 	{
+		id: "SEARXNG_URL",
+		label: "SearXNG",
+		description: "Base URL of a self-hosted SearXNG instance (e.g. http://127.0.0.1:9180) — web search for the researcher sub-agent, no API key. Its settings.yml must allow the json format. Preferred over Tavily/Brave when set.",
+		docsUrl: "https://docs.searxng.org/admin/settings/settings_search.html",
+	},
+	{
 		id: "TAVILY_API_KEY",
 		label: "Tavily",
 		description: "Web-search engine for the researcher sub-agent (AI-native search API). Setting the key activates it — no engine toggle needed.",
@@ -48,9 +54,26 @@ export const AUTH_KEYS: readonly AuthKeyInfo[] = [
 		description: "Web-search engine for the researcher sub-agent — the alternative to Tavily. Setting the key activates it.",
 		docsUrl: "https://brave.com/search/api/",
 	},
+	{
+		id: "ALPHAXIV_API_KEY",
+		label: "alphaXiv",
+		description: "Research-paper tools for the researcher sub-agent (alphaXiv MCP: paper search, paper reports and full text, PDF questions, paper code). Create one under alphaXiv Settings → API Keys.",
+		docsUrl: "https://www.alphaxiv.org/docs/mcp",
+	},
 ] as const;
 
 const AUTH_KEY_IDS: ReadonlySet<string> = new Set(AUTH_KEYS.map((k) => k.id));
+
+/** The CONNECTORS group (owner, 2026-10-26): research sources for the
+ *  researcher — shown with their full values in Settings (owner ruling:
+ *  these, and only these, are not masked). Model-provider keys and
+ *  Deepgram stay masked. */
+export const CONNECTOR_KEY_IDS: readonly string[] = ["SEARXNG_URL", "TAVILY_API_KEY", "BRAVE_API_KEY", "ALPHAXIV_API_KEY"];
+
+/** Entries whose value is an address, not a credential. */
+export function isUrlKey(id: string): boolean {
+	return id === "SEARXNG_URL";
+}
 
 export function isKnownAuthKey(id: string): boolean {
 	return AUTH_KEY_IDS.has(id);
@@ -164,6 +187,17 @@ export function validateKeyShape(id: string, rawValue: string): KeyShapeResult {
 		case "DEEPGRAM_API_KEY":
 			// No public format — the length floor only catches truncated pastes.
 			return nonEmpty(20);
+		case "ALPHAXIV_API_KEY":
+			// No public format — a length floor + paste hygiene only.
+			return nonEmpty(16);
+		case "SEARXNG_URL": {
+			// Not a credential: an http(s) base URL, stored as typed (trimmed).
+			let url: URL;
+			try { url = new URL(value); } catch { return { ok: false, error: `${id} must be a URL like http://127.0.0.1:9180` }; }
+			if (url.protocol !== "http:" && url.protocol !== "https:") return { ok: false, error: `${id} must start with http:// or https://` };
+			if (url.username || url.password || url.search || url.hash) return { ok: false, error: `${id} must be a plain base URL (no credentials, query or fragment)` };
+			return { ok: true };
+		}
 		default:
 			return { ok: false, error: `unknown key "${id}" (supported: ${[...AUTH_KEY_IDS].join(", ")})` };
 	}
@@ -196,6 +230,9 @@ export interface AuthKeyStatus {
 	present: boolean;
 	/** The masked tail + character count, e.g. "…ab12 (64 chars)". */
 	masked: string | null;
+	/** The full live value — CONNECTOR rows only (owner, 2026-10-26);
+	 *  every other row stays masked-only. */
+	value?: string;
 	/** Where the live value comes from, given env-wins precedence. */
 	source: "env" | "file" | "none";
 	/** True when the file holds a value that the environment shadows — the

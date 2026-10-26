@@ -19,7 +19,7 @@
  * tool depends on the PORT only and tests never touch the network.
  */
 
-import type { SearchEngineId, SearchHit, SearchProvider, SearchStatus } from "../core/search.ts";
+import { SEARCH_ENGINES, type SearchEngineId, type SearchHit, type SearchProvider, type SearchStatus } from "../core/search.ts";
 import { keyValue } from "./keys.ts";
 import { effectiveSettings } from "./stores.ts";
 
@@ -108,13 +108,43 @@ export function braveProvider(apiKey: string, fetchFn: FetchLike = fetch): Searc
 	};
 }
 
-/** The engines this wave ships, in PREFERENCE order (both keys present,
- *  no explicit pin → the first live engine wins; owner decision
- *  2026-09-20: Tavily first — the AI-native search API the wave chose). */
-const ENGINE_ORDER: ReadonlyArray<{ id: SearchEngineId; envVar: string }> = [
-	{ id: "tavily", envVar: "TAVILY_API_KEY" },
-	{ id: "brave", envVar: "BRAVE_API_KEY" },
-];
+/** SearXNG: GET <base>/search?q=…&format=json against a self-hosted
+ *  instance (web host, 2026-10-26). No credential: the "key" is the base
+ *  URL. The instance must allow the json format (search.formats in its
+ *  settings.yml). VERIFIED against a live instance, 2026-10-26: response
+ *  {results: [{title, url, content, engines, score, …}], unresponsive_engines}. */
+export function searxngProvider(baseUrl: string, fetchFn: FetchLike = fetch): SearchProvider {
+	return {
+		id: "searxng",
+		async search(query: string, count: number): Promise<SearchHit[]> {
+			const url = new URL("search", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+			url.searchParams.set("q", query);
+			url.searchParams.set("format", "json");
+			const resp = await fetchFn(url.toString(), {
+				headers: { accept: "application/json" },
+				signal: AbortSignal.timeout(30_000),
+			});
+			if (!resp.ok) {
+				const body = await resp.text();
+				throw new Error(`SearXNG ${resp.status}${resp.status === 403 ? " (is format=json enabled in the instance's settings.yml?)" : ""}: ${body.slice(0, 200)}`);
+			}
+			const data = (await resp.json()) as {
+				results?: Array<{ title?: string; url?: string; content?: string }>;
+			};
+			return (data.results ?? [])
+				.filter((r) => typeof r.url === "string" && r.url)
+				.slice(0, Math.min(count, 20))
+				.map((r) => ({
+					title: r.title ?? r.url ?? "",
+					url: r.url ?? "",
+					snippet: (r.content ?? "").replace(/\n/g, " ").slice(0, 500),
+				}));
+		},
+	};
+}
+
+/** The engines in PREFERENCE order — the core table (core/search.ts). */
+const ENGINE_ORDER = SEARCH_ENGINES;
 
 /** The engine's key (env-or-file; env wins) — null when the engine is
  *  not keyed, which by owner decision means NOT LIVE. */
@@ -122,6 +152,11 @@ function engineKey(id: SearchEngineId): string | null {
 	const envVar = ENGINE_ORDER.find((e) => e.id === id)?.envVar;
 	const value = envVar ? keyValue(envVar) : undefined;
 	return value ? value : null;
+}
+
+/** Every engine's live key/URL, read fresh. */
+function liveKeys(): Partial<Record<SearchEngineId, string | undefined>> {
+	return Object.fromEntries(ENGINE_ORDER.map(({ id }) => [id, engineKey(id) ?? undefined]));
 }
 
 /** Resolve the search state PURELY from the given pins (testable): the
@@ -138,7 +173,7 @@ export function resolveSearchEngineFor(
 			return {
 				available: false,
 				engine: null,
-				reason: `search engine is set to "${pinned}" but its API key is missing — set the ${pinned === "tavily" ? "TAVILY_API_KEY" : "BRAVE_API_KEY"} key`,
+				reason: `search engine is set to "${pinned}" but it is not configured — set the ${ENGINE_ORDER.find((e) => e.id === pinned)?.envVar} key`,
 				key: null,
 			};
 		}
@@ -151,7 +186,7 @@ export function resolveSearchEngineFor(
 	return {
 		available: false,
 		engine: null,
-		reason: "no search engine configured — set a Tavily or Brave search API key",
+		reason: "no search engine configured — set a SearXNG URL or a Tavily or Brave search API key",
 		key: null,
 	};
 }
@@ -160,13 +195,7 @@ export function resolveSearchEngineFor(
  *  settings record's pin + the auth store fresh each call, so a key saved
  *  mid-session activates on the next check (no restart). */
 export function searchStatus(): SearchStatus {
-	const { available, engine, reason } = resolveSearchEngineFor(
-		effectiveSettings().agent.search?.engine,
-		{
-			tavily: engineKey("tavily") ?? undefined,
-			brave: engineKey("brave") ?? undefined,
-		},
-	);
+	const { available, engine, reason } = resolveSearchEngineFor(effectiveSettings().agent.search?.engine, liveKeys());
 	return { available, engine, reason };
 }
 
@@ -180,10 +209,8 @@ export function searchAvailable(): boolean {
  *  the tool layer (Teacher stream) calls this once per search, so key
  *  rotations take effect immediately. */
 export function searchProvider(): SearchProvider | null {
-	const resolved = resolveSearchEngineFor(effectiveSettings().agent.search?.engine, {
-		tavily: engineKey("tavily") ?? undefined,
-		brave: engineKey("brave") ?? undefined,
-	});
+	const resolved = resolveSearchEngineFor(effectiveSettings().agent.search?.engine, liveKeys());
 	if (!resolved.available || !resolved.key) return null;
+	if (resolved.engine === "searxng") return searxngProvider(resolved.key);
 	return resolved.engine === "tavily" ? tavilyProvider(resolved.key) : braveProvider(resolved.key);
 }

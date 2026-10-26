@@ -10,6 +10,7 @@ import type { LhMessage } from "../native-messages.ts";
 import type { Phase3 } from "../phases.ts";
 import type { PlanNodeStatus, PlanTree } from "./plan.ts";
 import type { EmissionStats } from "./graph.ts";
+import type { ChatTopicLink, ChatTopicTarget } from "./topic.ts";
 
 // ─── Chat records (the session store's on-disk format) ───────────────────────
 
@@ -24,8 +25,11 @@ import type { EmissionStats } from "./graph.ts";
 /** The session's kind (practice sessions, owner 2026-10-04): "teach" is
  *  the default and ABSENT on pre-practice records (no migration — absence
  *  reads as teach); "practice" marks an adaptive-practice session — the
- *  practice agent, its two tools, no extraction, no graph writes. */
-export type ChatKind = "teach" | "practice";
+ *  practice agent, its two tools, no extraction, no graph writes;
+ *  "topic" (topics wave, 2026-10-26) marks a topic's mapping or check-up
+ *  conversation — the mapper agent, no extraction, hidden from the
+ *  session list (reached through its topic). */
+export type ChatKind = "teach" | "practice" | "topic";
 
 export interface ChatRecord {
 	id: string;
@@ -35,6 +39,11 @@ export interface ChatRecord {
 	messages: LhMessage[];
 	/** The session's kind — absent = teach (pre-practice records). */
 	kind?: ChatKind;
+	/** kind:"topic" only — the topic this conversation maps or checks. */
+	topic?: ChatTopicLink;
+	/** Teaching sessions started from a topic: the one component they
+	 *  target (topics wave, 2026-10-26). */
+	topicTarget?: ChatTopicTarget;
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
 	tree?: PlanTree;
 	/** Append-only usage log (observability, 2026-09): one entry per model

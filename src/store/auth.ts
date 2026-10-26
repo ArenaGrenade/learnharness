@@ -1,8 +1,6 @@
 /**
  * The AuthStore adapter (auth-keys wave, 2026-09-19): the flat {VAR: value}
- * auth.json map at config.AUTH_FILE — the SAME file the Electron app has
- * always hand-edited (owner decision: option A — same file, env-located,
- * zero migration). 0600, atomic writes, hand-edits keep working (the file
+ * auth.json map at config.AUTH_FILE (env-located). 0600, atomic writes, hand-edits keep working (the file
  * is re-read from disk on every access).
  *
  * The server (src/server/keys.ts) is the only intended writer: it applies

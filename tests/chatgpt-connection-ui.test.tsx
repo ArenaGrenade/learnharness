@@ -5,13 +5,22 @@ import { afterEach, test } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseHTML } from "linkedom";
-import { createRequire } from "node:module";
 import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { ChatGPTBackgroundAccess, ChatGPTConnection, ChatGPTUIProvider, CHATGPT_NOTICE, CHATGPT_DISCONNECT_COPY } from "../components/settings/chatgpt-connection.tsx";
 import { SettingsDialogBody } from "../components/settings/settings-dialog.tsx";
 import { KeysSection } from "../components/settings/keys-section.tsx";
 import { ModelControl } from "../components/model-picker.tsx";
 import type { ChatGPTStatus, ChatGPTControlBridge } from "../src/core/index.ts";
+import { connectionBridges, httpChatGPTBridge } from "../components/connection-bridges.ts";
+import { createChatGPT as createService, SCOPES } from "../src/server/connections/chatgpt.ts";
+import { chatGPTControl } from "../src/server/connections/host.ts";
+/** Loose-typed for scratch fixtures (the service validates every record). */
+const createChatGPT = (options: any): any => createService(options);
+/** The settings UI's bridge over a real service, through the HTTP control seam. */
+function controlBridge(service: any, listeners: Set<() => void>, onLogin = () => {}): ChatGPTControlBridge {
+ const control = (command: Record<string, unknown>) => chatGPTControl(command, service) as Promise<ChatGPTStatus>;
+ return { status: () => control({ op: "status" }), consent: (enabled) => control({ op: "consent", enabled }), login: (id) => { onLogin(); return control({ op: "login", id }); }, complete: (callbackUrl) => control({ op: "complete", callbackUrl }), cancel: () => control({ op: "cancel" }), select: (id) => control({ op: "select", id }), disconnect: (id) => control({ op: "disconnect", id }), logout: (id) => control({ op: "logout", id }), onChange: (cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; } };
+}
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
@@ -37,19 +46,19 @@ function fixture(initial = disconnected(), overrides: Partial<ChatGPTControlBrid
   disconnect: async (id) => { calls.disconnect.push(id); push({ ...status, activeId: status.activeId === id ? null : status.activeId, accounts: status.accounts.filter((a) => a.id !== id) }); return status; },
   logout: async () => { calls.logout++; return status; },
   consent: async (enabled) => { calls.consent.push(enabled); push({ ...status, allowBackgroundUse: enabled }); return status; },
+  complete: async () => status,
   onChange: (cb) => { listeners.add(cb); return () => listeners.delete(cb); }, ...overrides,
  };
- window.lh = { expandWindow() {}, chatgpt: bridge };
+ connectionBridges.chatgpt = bridge;
  return { calls, bridge, push, get status() { return status; }, complete() { push({ ...connected(status.allowBackgroundUse), pending: false }); } };
 }
 function recoveryController({ writeFails = false, tokens = "valid" }: { writeFails?: boolean; tokens?: "valid" | "missing" | "restricted" | "scope" | "expired" } = {}) {
- const require = createRequire(import.meta.url); const { createChatGPT, SCOPES } = require("../electron/chatgpt.cjs"); const { chatGPTControl } = require("../electron/chatgpt-ipc.cjs");
  const registration: any = { id: "fixture", clientId: "oaiapp_fixture", issuer: "https://auth.openai.com", subject: "fixture", email: "fixture@example.invalid", tokens: { accessToken: "fake-access", refreshToken: "fake-refresh", idToken: "fake-id", expiresAt: tokens === "expired" ? 0 : Date.now() + 3600000, scopes: tokens === "scope" ? ["openid"] : [...SCOPES] } };
  if (tokens === "missing") delete registration.tokens; if (tokens === "restricted") registration.reconnectRequired = true;
  let saved = { version: 1, hostId: "urn:uuid:offline-recovery", activeId: "fixture", allowBackgroundUse: true, registrations: [registration] };
  let browserAttempts = 0, tokenRequests = 0; const listeners = new Set<() => void>();
- const service = createChatGPT({ store: { read: async () => structuredClone(saved), write: async (next: typeof saved) => { if (writeFails) throw Object.assign(new Error("fake-storage-failure"), { code: "storage" }); saved = structuredClone(next); } }, openExternal: () => { browserAttempts++; throw new Error("No real browser"); }, fetch: async (url: string) => { tokenRequests++; assert.equal(tokens, "expired"); assert.equal(url, "https://auth.openai.com/api/accounts/oauth/token"); return Response.json({ error: "invalid_grant" }, { status: 401 }); }, onChange: () => { for (const cb of listeners) cb(); } });
- window.lh = { expandWindow() {}, chatgpt: { status: () => chatGPTControl({ op: "status" }, service), consent: (enabled) => chatGPTControl({ op: "consent", enabled }, service), login: (id) => chatGPTControl({ op: "login", id }, service), cancel: () => chatGPTControl({ op: "cancel" }, service), select: (id) => chatGPTControl({ op: "select", id }, service), disconnect: (id) => chatGPTControl({ op: "disconnect", id }, service), logout: (id) => chatGPTControl({ op: "logout", id }, service), onChange: (cb) => { listeners.add(cb); return () => listeners.delete(cb); } } };
+ const service = createChatGPT({ store: { read: async () => structuredClone(saved), write: async (next: typeof saved) => { if (writeFails) throw Object.assign(new Error("fake-storage-failure"), { code: "storage" }); saved = structuredClone(next); } }, fetch: async (url: string) => { tokenRequests++; assert.equal(tokens, "expired"); assert.equal(url, "https://auth.openai.com/api/accounts/oauth/token"); return Response.json({ error: "invalid_grant" }, { status: 401 }); }, onChange: () => { for (const cb of listeners) cb(); } });
+ connectionBridges.chatgpt = controlBridge(service, listeners, () => { browserAttempts++; });
  return { service, get saved() { return saved; }, get browserAttempts() { return browserAttempts; }, get tokenRequests() { return tokenRequests; } };
 }
 async function mount(children: React.ReactNode = <ChatGPTConnection />) {
@@ -64,9 +73,14 @@ async function selectAccount(label: string, id: string) {
  const select = document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!; assert(select);
  await act(async () => { Object.defineProperty(select, "value", { configurable: true, writable: true, value: id }); select.dispatchEvent(new window.Event("change", { bubbles: true })); });
 }
+/** Type into a controlled input: the prototype setter bypasses React's value tracker. */
+function type(input: HTMLInputElement, value: string) {
+ Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, value);
+ input.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
 async function begin() { await click(byTest("chatgpt-login")); await click(byTest("chatgpt-proceed")); }
 async function confirmDisconnect() { await click(byTest("chatgpt-disconnect")); await click(byTest("chatgpt-confirm-disconnect")); }
-afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; delete window.lh; globalThis.fetch = originalFetch; });
+afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; connectionBridges.chatgpt = httpChatGPTBridge; globalThis.fetch = originalFetch; });
 
 test("Providers is the first/default page; General is last and other pages keep relative order", () => {
  const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} />);
@@ -83,10 +97,10 @@ test("Providers has exactly four ordered sections; unknown variables stay masked
  };
  fixture(); await mount(<KeysSection />);
  const headings = [...document.querySelectorAll('[data-testid^="group-"] > p')].map((el) => el.textContent);
- assert.deepEqual(headings, ["Model API keys", "Subscriptions", "Dictation", "Search"]);
+ assert.deepEqual(headings, ["Model API keys", "Subscriptions", "Dictation", "Connectors"]);
  assert(byTest("key-deepgram_api_key").closest('[data-testid="group-dictation"]'));
- assert(byTest("key-tavily_api_key").closest('[data-testid="group-search"]'));
- assert(byTest("key-brave_api_key").closest('[data-testid="group-search"]'));
+ assert(byTest("key-tavily_api_key").closest('[data-testid="group-connectors"]'));
+ assert(byTest("key-brave_api_key").closest('[data-testid="group-connectors"]'));
  assert(byTest("unknown-FUTURE_VAR").closest('[data-testid="group-provider-keys"]'));
  assert(byTest("group-unknown-keys").parentElement?.lastElementChild === byTest("group-unknown-keys"));
  assert.equal(byTest("unknown-FUTURE_VAR").textContent, "FUTURE_VAR…abcd"); assert(!byTest("unknown-FUTURE_VAR").querySelector("input, button"));
@@ -212,7 +226,7 @@ test("email-only connected selector and Manage remain responsive; account select
 });
 
 test("Disconnect is the quiet red left-footer action below identity; confirmation Cancel never forgets", async () => {
- assert.deepEqual(CHATGPT_DISCONNECT_COPY, { title: "Disconnect account?", body: "This removes the saved account and its credentials from this device." });
+ assert.deepEqual(CHATGPT_DISCONNECT_COPY, { title: "Disconnect account?", body: "This removes the saved account and its credentials from this LearnHarness server." });
  const f = fixture(connected()); await mount(); await click(button("Manage…"));
  assert.equal(byTest("chatgpt-account-actions").textContent, "Disconnect"); assert.match(byTest("chatgpt-disconnect").className, /text-red/);
  assert.equal(byTest("chatgpt-account-footer").firstElementChild, byTest("chatgpt-account-actions"));
@@ -268,14 +282,12 @@ test("actual controller storage-write failure is not ChatGPT authorization recov
   assert.equal(status.accounts[0].canSignInAgain, false); assert.equal(f.browserAttempts, 0); assert.equal(f.tokenRequests, 0);
  } finally { await act(async () => f.service.close()); }
 });
-for (const tokens of ["missing", "restricted", "scope"] as const) test(`actual controller ${tokens} authorization permits recovery, but paused/closed state does not`, async () => {
+for (const tokens of ["missing", "restricted", "scope"] as const) test(`actual controller ${tokens} authorization permits recovery, but a closed connection does not`, async () => {
  const f = recoveryController({ tokens });
  try {
   await mount(); await click(byTest("chatgpt-login")); await selectAccount("Saved ChatGPT account", "fixture"); await click(button("Manage…"));
   assert.equal((await f.service.status()).accounts[0].canSignInAgain, true); assert(button("Sign in again"));
   assert.equal(f.saved.registrations[0].canSignInAgain, undefined, "eligibility is projected, never persisted");
-  await act(async () => f.service.pause()); assert.equal((await f.service.status()).accounts[0].canSignInAgain, false); assert(!button("Sign in again"));
-  await act(async () => f.service.resume()); assert.equal((await f.service.status()).accounts[0].canSignInAgain, true); assert(button("Sign in again"));
   await act(async () => f.service.close()); assert.equal((await f.service.status()).accounts[0].canSignInAgain, false); assert(!button("Sign in again"));
   assert.equal(f.browserAttempts, 0); assert.equal(f.tokenRequests, 0);
  } finally { await act(async () => f.service.close()); }
@@ -494,29 +506,36 @@ test("canceled attempt's late reply cannot release a newer pending attempt or ap
  await act(async () => f.complete()); assert.deepEqual(f.calls.consent, []); assert.equal(f.status.allowBackgroundUse, true); assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'));
 });
 
-test("real main/control bridge: immediate pending, actual cancellation, verified callback, then explicit global draft persistence", async () => {
- const require = createRequire(import.meta.url); const { createChatGPT, SCOPES } = require("../electron/chatgpt.cjs"); const { chatGPTControl } = require("../electron/chatgpt-ipc.cjs");
+test("real service/control bridge: immediate pending, actual cancellation, pasted verified callback, then explicit global draft persistence", async () => {
  const { privateKey, publicKey } = await generateKeyPair("RS256"); const jwk = { ...await exportJWK(publicKey), kid: "ui-fixture", alg: "RS256", use: "sig" };
  let saved: any = null, authorize!: URL, tokenCalls = 0; const listeners = new Set<() => void>();
- const service = createChatGPT({ store: { secure() {}, async read() { return saved; }, async write(s: any) { saved = structuredClone(s); } }, openExternal: async (url: string) => { authorize = new URL(url); }, onChange: () => { for (const cb of listeners) cb(); }, fetch: async (url: string, init: RequestInit) => {
+ const service = createChatGPT({ store: { secure() {}, async read() { return saved; }, async write(s: any) { saved = structuredClone(s); } }, onChange: () => { for (const cb of listeners) cb(); }, fetch: async (url: string, init: RequestInit) => {
   if (url.endsWith("jwks.json")) return Response.json({ keys: [jwk] });
   assert.equal(url, "https://auth.openai.com/api/accounts/oauth/token"); tokenCalls++;
   const form = init.body as URLSearchParams;
   const jwt = await new SignJWT({ nonce: authorize.searchParams.get("nonce"), email: "fixture@example.invalid" }).setProtectedHeader({ alg: "RS256", kid: "ui-fixture" }).setIssuer("https://auth.openai.com").setSubject("fixture-subject").setAudience(form.get("client_id")!).setIssuedAt().setExpirationTime("1h").sign(privateKey);
   return Response.json({ access_token: "fixture-access", refresh_token: "fixture-refresh", id_token: jwt, token_type: "Bearer", expires_in: 3600, scope: SCOPES.join(" ") });
  } });
- window.lh = { expandWindow() {}, chatgpt: { status: () => chatGPTControl({ op: "status" }, service), login: (id) => chatGPTControl({ op: "login", id }, service), cancel: () => chatGPTControl({ op: "cancel" }, service), select: (id) => chatGPTControl({ op: "select", id }, service), disconnect: (id) => chatGPTControl({ op: "disconnect", id }, service), logout: (id) => chatGPTControl({ op: "logout", id }, service), consent: (enabled) => chatGPTControl({ op: "consent", enabled }, service), onChange: (cb) => { listeners.add(cb); return () => listeners.delete(cb); } } };
+ connectionBridges.chatgpt = controlBridge(service, listeners);
  try {
   await mount(); await begin(); assert.equal((await service.status()).pending, true); await click(button("Cancel", byTest("chatgpt-account-dialog"))); assert.equal((await service.status()).pending, false); assert.equal(tokenCalls, 0);
   await click(byTest("chatgpt-login")); await click(toggle()); await click(byTest("chatgpt-proceed"));
+  const link = byTest("chatgpt-sign-in-link") as HTMLAnchorElement; assert(link, "pending sign-in shows the authorize link");
+  authorize = new URL(link.getAttribute("href")!); assert.equal(authorize.origin, "https://auth.openai.com"); assert.equal(link.getAttribute("target"), "_blank");
   const callback = new URL(authorize.searchParams.get("redirect_uri")!); callback.search = new URLSearchParams({ state: authorize.searchParams.get("state")!, code: "fixture-code", client_id: "oaiapp_ui_fixture" }).toString();
-  await act(async () => { const response = await originalFetch(callback); await response.text(); for (let i = 0; i < 100 && (saved.allowBackgroundUse !== false || (await service.status()).pending); i++) await new Promise((r) => setImmediate(r)); });
+  const input = byTest("chatgpt-callback-input") as HTMLInputElement;
+  // A mistyped address is refused inline and keeps the attempt pending.
+  await act(async () => { type(input, "http://127.0.0.1:1/auth/callback?state=wrong&code=x"); });
+  await act(async () => { (byTest("chatgpt-paste-back") as HTMLFormElement).dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); });
+  assert.match(document.body.textContent!, /does not belong to this sign-in/); assert.equal((await service.status()).pending, true); assert.equal(tokenCalls, 0);
+  await act(async () => { type(input, callback.toString()); });
+  await act(async () => { (byTest("chatgpt-paste-back") as HTMLFormElement).dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); for (const deadline = Date.now() + 5000; Date.now() < deadline && (saved.allowBackgroundUse !== false || (await service.status()).pending);) await new Promise((r) => setTimeout(r, 5)); });
   assert.equal(tokenCalls, 1); assert.equal(saved.allowBackgroundUse, false); assert.equal(saved.registrations[0].background, undefined);
   assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]')); assert(button("Manage…"));
  } finally { await act(async () => service.close()); }
 });
 
-test("browser-only sign-in is disabled; foreground toolbar has no plan badge or background action", async () => {
+test("an unreachable server keeps sign-in disabled; foreground toolbar has no plan badge or background action", async () => {
  await mount(); assert((byTest("chatgpt-login") as HTMLButtonElement).disabled); await click(byTest("chatgpt-login")); assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'));
  await act(async () => root!.unmount()); host?.remove(); root = undefined;
  globalThis.fetch = async (input) => {
@@ -526,4 +545,19 @@ test("browser-only sign-in is disabled; foreground toolbar has no plan badge or 
  };
  fixture(connected(false)); await mount(<ModelControl />); assert.match(byTest("stats-model").textContent!, /gpt/i);
  assert(!document.body.textContent?.includes("Using ChatGPT plan")); assert(!document.body.textContent?.includes("Enable background use"));
+});
+
+test("a pending paste-back sign-in survives a reload: the row offers Finish sign-in and reopens the paste step", async () => {
+ const signInUrl = "https://auth.openai.com/api/accounts/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A50000%2Fauth%2Fcallback";
+ const f = fixture({ ...disconnected(), pending: true, signInUrl }, { complete: async () => connected() });
+ await mount();
+ const row = byTest("chatgpt-login") as HTMLButtonElement;
+ assert.equal(row.textContent, "Finish sign-in"); assert.equal(row.disabled, false);
+ await click(row);
+ assert.equal((byTest("chatgpt-sign-in-link") as HTMLAnchorElement).getAttribute("href"), signInUrl);
+ const input = byTest("chatgpt-callback-input") as HTMLInputElement;
+ type(input, "http://127.0.0.1:50000/auth/callback?state=s&code=c");
+ await act(async () => { (byTest("chatgpt-paste-back") as HTMLFormElement).dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); });
+ assert(!document.querySelector('[data-testid="chatgpt-account-dialog"]'), "verified completion closes the resumed dialog");
+ assert.deepEqual(f.calls.login, [], "resuming never starts a new attempt");
 });

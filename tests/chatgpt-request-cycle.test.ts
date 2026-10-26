@@ -7,6 +7,7 @@ import { piModels, piEngineForSpec, APP_IDENTITY } from "../src/agent/models.ts"
 import { refreshChatGPTModels, chatGPTScopeCurrent } from "../src/agent/chatgpt-bridge.ts";
 import { ChatGPTRequestCycle } from "../src/agent/chatgpt-request-cycle.ts";
 import { createTeacherAgent } from "../src/agent/teacher-agent.ts";
+import { fakeConnectionHost } from "./fake-connection-host.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,32 +18,28 @@ fs.writeFileSync(process.env.LH_AUTH_FILE, "{}");
 const { runPiTurn } = await import("../src/server/pi/ui-stream.ts");
 import { newUserMessage, newNextMessage, newThinkingMessage, newAnswerResult, reconstructRequestCause, concludedByDismissalPair, type LhMessage } from "../src/core/native-messages.ts";
 
-const originalSend = Object.getOwnPropertyDescriptor(process, "send");
-const originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
 const realFetch = globalThis.fetch;
-const desktopMarker = process.env.LH_DESKTOP_SERVER, desktopSecret = process.env.LH_DESKTOP_API_SECRET;
+let host: ReturnType<typeof fakeConnectionHost>;
 const model = piModels().getModel("openai", "gpt-5") as Model<"openai-responses">;
 let epoch = 1, revision = 1, background = true;
 let cut: "lease" | "payload" | "full" | "afterFetch" | "none" = "none";
 let leases: boolean[] = [], fetches = 0, toolFirst = false;
 const status = () => ({ available: true, pending: false, allowBackgroundUse: background, activeId: "scratch", accounts: [{ id: "scratch", registration: "oaiapp_scratch", email: "dummy@example.invalid", connected: true, planEnabled: true, background: !background }], error: null });
-const ipc = (m: unknown) => (process.emit as (name: string, m: unknown) => boolean)("message", m);
+const ipc = (m: unknown) => host.deliver(m);
 function revoke(full = false) {
  background = false; if (full) epoch++;
  ipc({ channel: "lh:chatgpt", kind: "state", stamp: { epoch, authorityRevision: epoch, revision: ++revision }, status: status(), invalidate: full ? "all" : "background" });
 }
 before(() => {
- process.env.LH_DESKTOP_SERVER = "1"; process.env.LH_DESKTOP_API_SECRET = "d".repeat(64);
- Object.defineProperty(process, "connected", { configurable: true, value: true });
- Object.defineProperty(process, "send", { configurable: true, value: (m: any, callback?: () => void) => {
+ host = fakeConnectionHost("lh:chatgpt", (m) => {
   if (m.op === "lease") {
    leases.push(m.background);
    assert.equal(m.expectedAccountId, "scratch"); assert.equal(m.expectedAuthorityRevision, epoch); assert.equal(m.selectedModelId, model.id);
    if (m.background && (cut === "lease" || cut === "full")) { const full = cut === "full"; cut = "none"; revoke(full); }
   }
   const value = { epoch, authorityRevision: epoch, revision, ...(m.op === "lease" ? { accountId: "scratch", accessToken: "dummy-oauth-native" } : { status: status(), accountId: "scratch", models: [{ id: model.id, name: "Scratch" }] }) };
-  queueMicrotask(() => ipc({ channel: "lh:chatgpt", id: m.id, op: m.op, ok: true, value })); callback?.(); return true;
- } });
+  queueMicrotask(() => ipc({ channel: "lh:chatgpt", id: m.id, op: m.op, ok: true, value }));
+ });
  globalThis.fetch = async (input, init) => {
   const request = new Request(input, init);
   assert.equal(request.url, "https://api.openai.com/v1/responses");
@@ -61,12 +58,9 @@ before(() => {
  };
 });
 after(() => {
- if (desktopMarker === undefined) delete process.env.LH_DESKTOP_SERVER; else process.env.LH_DESKTOP_SERVER = desktopMarker;
- if (desktopSecret === undefined) delete process.env.LH_DESKTOP_API_SECRET; else process.env.LH_DESKTOP_API_SECRET = desktopSecret;
+ host.disconnect();
  globalThis.fetch = realFetch;
  fs.rmSync(scratch, { recursive: true, force: true });
- if (originalSend) Object.defineProperty(process, "send", originalSend); else delete process.send;
- if (originalConnected) Object.defineProperty(process, "connected", originalConnected); else delete (process as { connected?: boolean }).connected;
 });
 const automatic = (id = "auto") => ({ id, role: "custom" as const, customType: "subagent-steer" as const, content: "Automatic result", details: { jobId: "dummy-job" }, display: true, timestamp: 2 });
 async function nativeRun(where: typeof cut, staged: boolean, withLearner = true, commitThrows = false, lateAutomatic = false, withTool = false) {

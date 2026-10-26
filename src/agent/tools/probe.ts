@@ -1,8 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { serverExecute } from "../tool-execute.ts";
-import { probeDoneInputSchema, PROBE_DONE_ACK_TEXT } from "../../core/contracts.ts";
+import { probeDoneInputSchema, targetedProbeDoneInputSchema, PROBE_DONE_ACK_TEXT, type ChatTopicTarget, type TopicVerdict } from "../../core/contracts.ts";
 import { danglingQuestionOf, hasProbeDone, type LhMessage } from "../../core/native-messages.ts";
-import type { ChatStore } from "../../core/ports.ts";
+import type { ChatStore, TopicStore } from "../../core/ports.ts";
 import { buildProbeHandoffSteer, type SteerMessage } from "../../core/contracts.ts";
 
 /** What the probe_done tool closes over. */
@@ -13,6 +13,10 @@ export interface ProbeDoneContext {
 	/** Queue the handoff steer (the wake pipeline — src/server/jobs.ts).
 	 *  Injected so this module never imports the server seam. */
 	deliver: (steer: SteerMessage) => void;
+	/** A session started from a topic (topics wave, 2026-10-26): probe_done
+	 *  then requires targetVerdict and records it as topic evidence. */
+	topicTarget?: ChatTopicTarget;
+	topicStore?: TopicStore;
 }
 
 /** Does the transcript already carry a concluded probe (any state)?
@@ -60,7 +64,7 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 				"the probe is already concluded. After it succeeds, say your closing sentence and end your turn.",
 			// The core-owned schema (contracts/probe.ts) — the SAME schema the UI
 			// parse seam (tool-parts.ts) runs, so boundary-valid ⇔ consumer-parseable.
-			parameters: probeDoneInputSchema,
+			parameters: ctx.topicTarget ? targetedProbeDoneInputSchema : probeDoneInputSchema,
 			execute: serverExecute("probe_done", probeDoneInputSchema, async (input) => {
 				const record = ctx.chatStore.getChat(ctx.chatId);
 				if (!record) return { ok: false, error: `Chat not found: ${ctx.chatId}` };
@@ -75,6 +79,21 @@ export function probeDoneTool(ctx: ProbeDoneContext): Record<string, AgentTool<a
 				}
 				if (probeConcluded(record.messages)) {
 					return { ok: false, error: "The probe is already concluded — probe_done fires exactly once." };
+				}
+				const target = ctx.topicTarget;
+				const targetVerdict = (input as { targetVerdict?: { verdict: TopicVerdict; note: string } }).targetVerdict;
+				if (target && !targetVerdict) {
+					return { ok: false, error: "This session targets a topic component — probe_done needs targetVerdict: his standing on the target before teaching." };
+				}
+				if (target && targetVerdict) {
+					ctx.topicStore?.appendEvidence(target.topicId, {
+						componentId: target.componentId,
+						kind: "session-probe",
+						verdict: targetVerdict.verdict,
+						note: targetVerdict.note.trim(),
+						chatId: ctx.chatId,
+						at: new Date().toISOString(),
+					});
 				}
 				try {
 					ctx.deliver(buildProbeHandoffSteer(ctx.chatId));

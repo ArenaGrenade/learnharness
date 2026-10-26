@@ -8,8 +8,10 @@ import { APP_IDENTITY, piEngineFor, type PiEngine } from "./models.ts";
 import { effectivePromptSegments } from "./prompt-segments.ts";
 import {
 	askUserQuestionTool,
+	createMapperTools,
 	createProberTools,
 	createTeacherTools,
+	type MapperToolContext,
 	type ProbeDoneContext,
 	type ProberToolContext,
 	type TeacherToolContext,
@@ -48,7 +50,7 @@ import { usageWasAdmitted } from "./subscription-request-cycle.ts";
 
 /** Which agent's prompt directory to compose. Practice (2026-10-04)
  *  composes ONLY its own directory — see prompt-segments.ts. */
-export type AgentKind = "prober" | "teacher" | "practice";
+export type AgentKind = "prober" | "teacher" | "practice" | "mapper";
 
 // P2 (2026-09-19): segment discovery + override resolution live in ONE
 // canonical place now — src/store/prompt-overrides.ts (listSourceSegments
@@ -88,6 +90,7 @@ const composedInstructions: Record<AgentKind, string> = {
 	prober: composeInstructions("prober"),
 	teacher: composeInstructions("teacher"),
 	practice: composeInstructions("practice"),
+	mapper: composeInstructions("mapper"),
 };
 
 // Money channel (wave 4): the chat-handler passes a per-turn collector;
@@ -173,7 +176,7 @@ function baseAgentOptions(kind: AgentKind, opts: AgentBuildOptions, tools: Agent
 	// the session's conversation engine — practice rides the same
 	// conversation-spec resolution as teaching); the cast keeps AgentKind
 	// ("practice" is not a ModelRole) honest about that.
-	const engine = opts.engine ?? piEngineFor(kind as "prober" | "teacher");
+	const engine = opts.engine ?? piEngineFor(kind === "mapper" ? "prober" : kind as "prober" | "teacher");
 	const stopper = makeQuestionStopper();
 	const systemPrompt = opts.promptSwitches
 		? composeInstructions(kind, opts.promptSwitches)
@@ -322,8 +325,20 @@ export function createPracticeAgent(ctx: PracticeToolContext, opts: AgentBuildOp
 	return baseAgentOptions("practice", opts, Object.values(tools));
 }
 
+/**
+ * The MAPPER (topics wave, 2026-10-26): runs a kind:"topic" conversation —
+ * a topic's mapping (probe every component down to held ground) or a
+ * short check-up of one component. Prober-like mechanics, its own doctrine
+ * (prompts/mapper/), no handoff: the map is the product.
+ */
+export function createMapperAgent(ctx: MapperToolContext, opts: AgentBuildOptions = {}) {
+	const tools = opts.tools ?? createMapperTools(ctx, opts.toolToggles);
+	return baseAgentOptions("mapper", opts, Object.values(tools));
+}
+
 export type ProberAgent = ReturnType<typeof createProberAgent>;
 export type TeacherAgent = ReturnType<typeof createTeacherAgent>;
 export type PracticeAgent = ReturnType<typeof createPracticeAgent>;
-export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent;
+export type MapperAgent = ReturnType<typeof createMapperAgent>;
+export type TeachingAgent = ProberAgent | TeacherAgent | PracticeAgent | MapperAgent;
 

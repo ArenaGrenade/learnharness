@@ -17,10 +17,10 @@
  *
  * Reading font (appearance wave, 2026-09-26, owner ruling): a searchable
  * dropdown of the user's INSTALLED fonts (FontMenuList over model-menu's
- * machine) fed by window.queryLocalFonts() in the desktop shell — the
+ * machine) fed by window.queryLocalFonts() where the browser offers it — the
  * enumeration is click-bound (the API requires user activation), deduped
  * to unique families, the factory family excluded (the DEFAULT row is
- * it). In a plain dev browser the API is absent → a small curated list
+ * it). Where the API is absent (Firefox, Safari) → a small curated list
  * + a footer that says exactly that — never a fabricated system list.
  * The custom-family input inside the menu is the manual escape path.
  * Empty/unset keeps meaning Source Sans 3.
@@ -101,7 +101,7 @@ export function AppearanceSection({
 	const md = appearance?.mdRendering;
 
 	// The font dropdown's open state + its enumeration cache. undefined =
-	// not enumerated yet (desktop: click-bound queryLocalFonts pending);
+	// not enumerated yet (click-bound queryLocalFonts pending);
 	// null = enumeration UNAVAILABLE (the API is absent in a plain
 	// browser, rejected, or resolved EMPTY — Electron 44's local-fonts
 	// grant passes and the enumeration still yields zero fonts,
@@ -259,7 +259,7 @@ export function AppearanceSection({
 										: localFonts === null
 											? enumEmpty
 												? "Common families — installed fonts could not be read"
-												: "Common families — your installed list needs the desktop app"
+												: "Common families — this browser does not list installed fonts"
 											: "Your installed fonts"
 								}
 							/>

@@ -9,12 +9,16 @@ import { useZeroKeys, useStrongKeyless } from "../components/setup-cta.tsx";
 import { notifySettingsSaved } from "../components/settings-signal.ts";
 import { SidebarProvider } from "../components/sidebar.tsx";
 import { ChatGPTConnection, ChatGPTUIProvider } from "../components/settings/chatgpt-connection.tsx";
+import { ServerEventsProvider, type NotifySource } from "../components/server-events.tsx";
+import { connectionBridges, httpChatGPTBridge } from "../components/connection-bridges.ts";
 import { GraphCostControl } from "../components/graph-view.tsx";
 import { graphCostSummary as foldGraphCostSummary, type CostSummaryInput } from "../src/core/cost-summary.ts";
 const graphCostSummary = (input: CostSummaryInput) => foldGraphCostSummary(input, () => null);
 import type { ModelCatalogResponse, ChatGPTStatus } from "../src/core/index.ts";
 const dom = parseHTML("<html><body></body></html>");
-Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
+Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, Event: dom.window.Event, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
+// linkedom has no media queries; the sidebar asks whether it is a phone.
+Object.assign(dom.window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
 const originalFetch = globalThis.fetch;
 let root: Root | undefined, host: HTMLDivElement | undefined;
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
@@ -28,7 +32,7 @@ function Reader({ id }: { id: string }) {
  return <span data-testid={id}>{catalog ? [...catalogLimits(catalog).keys()].join(",") : "unavailable"}</span>;
 }
 async function mount(children: React.ReactNode) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); await act(async () => root!.render(children)); }
-afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; globalThis.fetch = originalFetch; delete window.lh; snapshots = {}; });
+afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; globalThis.fetch = originalFetch; connectionBridges.chatgpt = httpChatGPTBridge; snapshots = {}; });
 
 test("shared ChatGPT-only readiness admits without API keys; connection invalidation clears every reader and fences old success/error", async () => {
  const requests: ReturnType<typeof deferred<Response>>[] = [];
@@ -62,23 +66,26 @@ test("plan plus unknown graph rows keep the existing unknown suffix without fabr
  assert(!document.body.textContent?.includes("$0.00"));
 });
 
-test("root-lifetime safe bridge publishes with Connections unmounted; commands/panel pushes do not duplicate global signals", async () => {
- let pushes: (() => void)[] = [], subscriptions = 0, unsubscriptions = 0, fetches = 0;
+test("root-lifetime relay publishes connection changes with Connections unmounted; the panel's own refresh never duplicates global signals", async () => {
+ const frames = new Map<string, (data: string) => void>();
+ const source: NotifySource = { close() {}, onOpen() {}, onEvent: (name, cb) => { frames.set(name, cb); } };
+ const changed = () => act(async () => { frames.get("connections-changed")!("{}"); });
+ let statusReads = 0, fetches = 0;
  const safe: ChatGPTStatus = { available: true, pending: false, allowBackgroundUse: false, activeId: "a", accounts: [{ id: "a", email: "dummy@example.invalid", registration: "oaiapp_dummy", connected: true, planEnabled: true }], error: null };
- window.lh = { expandWindow() {}, chatgpt: { status: async () => safe, login: async () => safe, cancel: async () => safe, select: async () => safe, disconnect: async () => safe, logout: async () => safe, consent: async () => safe, onChange: (cb) => { subscriptions++; pushes.push(cb); return () => { unsubscriptions++; pushes = pushes.filter((c) => c !== cb); }; } } };
+ connectionBridges.chatgpt = { ...httpChatGPTBridge, status: async () => { statusReads++; return safe; } };
  globalThis.fetch = async (input) => { assert.equal(input, "/api/models"); fetches++; return Response.json(body(`model-${fetches}`)); };
- await mount(<SidebarProvider><Reader id="root" /></SidebarProvider>);
- assert.equal(subscriptions, 1);
+ const app = (panel: boolean) => <ServerEventsProvider connect={() => source}><SidebarProvider><Reader id="root" />{panel && <ChatGPTUIProvider><ChatGPTConnection /></ChatGPTUIProvider>}</SidebarProvider></ServerEventsProvider>;
+ await mount(app(false));
  const before = fetches;
- await act(async () => { for (const callback of pushes) callback(); });
- assert.equal(fetches, before + 1);
- await act(async () => root!.render(<SidebarProvider><Reader id="root" /><ChatGPTUIProvider><ChatGPTConnection /></ChatGPTUIProvider></SidebarProvider>));
- assert.equal(subscriptions, 2);
- const mounted = fetches;
- await act(async () => { for (const callback of pushes) callback(); });
- assert.equal(fetches, mounted + 1, "one global publisher even when panel also reads pushed status");
- await act(async () => root!.render(<SidebarProvider><Reader id="root" /></SidebarProvider>));
- assert.equal(unsubscriptions, 1);
- await act(async () => { for (const callback of pushes) callback(); });
+ await changed();
+ assert.equal(fetches, before + 1, "the sidebar relay re-reads key-gated surfaces with no panel mounted");
+ await act(async () => root!.render(app(true)));
+ const mounted = fetches, reads = statusReads;
+ await changed();
+ assert.equal(fetches, mounted + 1, "one global publisher even when the panel also refreshes");
+ assert.equal(statusReads, reads + 1, "the mounted panel re-reads its status once");
+ await act(async () => root!.render(app(false)));
+ await changed();
  assert.equal(fetches, mounted + 2);
+ assert.equal(statusReads, reads + 1, "an unmounted panel stops listening");
 });

@@ -67,6 +67,15 @@ Numbered findings with inline source citations:
 ## Gaps
 What couldn't be answered. Suggested next steps.`;
 
+/** Appended when the alphaXiv paper tools are present (web host, 2026-10-26). */
+const ALPHAXIV_INSTRUCTIONS = `## Research papers — alphaXiv tools
+For questions about research papers (arXiv and similar), prefer the alphaxiv_* tools over web search:
+- alphaxiv_discover_papers finds and ranks papers for a topic.
+- alphaxiv_get_paper_content returns a paper's report, or its full text when you ask for it — use the full text for exact claims, definitions and equations.
+- alphaxiv_answer_pdf_queries returns the relevant pages of a paper for specific questions.
+- alphaxiv_read_files_from_github_repository reads a paper's code.
+Cite papers by their arXiv URL (https://arxiv.org/abs/<id>) in your sources. If an alphaxiv tool fails, continue with web_search/web_fetch.`;
+
 export interface ResearcherRunOptions {
 	engine?: PiEngine;
 	/** The search seam (search port wave, 2026-09-20): resolves the LIVE
@@ -79,6 +88,9 @@ export interface ResearcherRunOptions {
 	 *  to this per-job temp dir — PDFs from the web, read page-level. The
 	 *  runner owns its lifecycle (mkdtemp before, rm after). */
 	pdfDir?: string;
+	/** Extra source tools for this run (the alphaXiv paper tools when the
+	 *  learner set a key — composed by the server, opened per job). */
+	extraTools?: AgentTool<any>[];
 	abortSignal?: AbortSignal;
 	onUsage?: (usage: Usage) => void;
 	onToolStart?: (toolName: string, args: unknown) => void;
@@ -94,11 +106,12 @@ export interface ResearcherRunOptions {
 export async function runResearcherAgent(prompt: string, opts: ResearcherRunOptions = {}): Promise<string> {
 	const tools = Object.values(createWebTools(opts.search ?? (() => null)));
 	if (opts.pdfDir) tools.push(...Object.values(createPdfReadTools(opts.pdfDir)));
+	if (opts.extraTools?.length) tools.push(...opts.extraTools);
 	const { text } = await runSubagent(tools, {
 		role: "researcher",
 		prompt,
 		engine: opts.engine,
-		systemPrompt: INSTRUCTIONS,
+		systemPrompt: opts.extraTools?.some((t) => t.name.startsWith("alphaxiv_")) ? `${INSTRUCTIONS}\n\n${ALPHAXIV_INSTRUCTIONS}` : INSTRUCTIONS,
 		maxTurns: 12,
 		abortSignal: opts.abortSignal,
 		onUsage: opts.onUsage,

@@ -2,22 +2,21 @@ import type { Api, Model, ModelAuth } from "@earendil-works/pi-ai";
 import { NATIVE_SUBSCRIPTIONS, type NativeSubscriptionProviderId, type NativeSubscriptionScope, type NativeSubscriptionSnapshot, type NativeSubscriptionStatus } from "../core/contracts/subscriptions.ts";
 import type { AdmissionScope, NoDispatchKind } from "./chatgpt-request-cycle.ts";
 
-interface Pending { op: string; resolve(value: unknown): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
 interface State {
 	statuses: Map<NativeSubscriptionProviderId, NativeSubscriptionStatus>;
 	models: Map<NativeSubscriptionProviderId, Model<Api>[]>;
-	pending: Map<string, Pending>;
+	host: SubscriptionHost | null;
 	controllers: Map<AbortController, { providerId: NativeSubscriptionProviderId; background: boolean }>;
 	listeners: Set<() => void>;
-	counter: number;
 }
+/** The server's in-process credential owner (src/server/connections), plugged
+ * in by the composition root. The agent layer never imports it directly. */
+export interface SubscriptionHost { request(op: "snapshot" | "lease", fields: Record<string, unknown>): Promise<unknown> }
 const KEY = Symbol.for("lh.subscriptions.bridge");
 export function nativeSubscriptionId(logicalId: string): NativeSubscriptionProviderId | undefined {
 	return NATIVE_SUBSCRIPTIONS.find((entry) => entry.logicalId === logicalId)?.providerId;
 }
-function desktopConnected(): boolean {
-	return process.env.LH_DESKTOP_SERVER === "1" && (process.env.LH_DESKTOP_API_SECRET?.length ?? 0) >= 64 && typeof process.send === "function" && process.connected === true;
-}
+function hostConnected(): boolean { return bridge().host !== null; }
 function notify(state: State) { for (const listener of state.listeners) { try { listener(); } catch { /* observer isolation */ } } }
 function invalidate(state: State, providerId?: NativeSubscriptionProviderId) {
 	for (const [controller, owner] of state.controllers) if (!providerId || owner.providerId === providerId) controller.abort("all");
@@ -46,53 +45,43 @@ function accept(state: State, snapshot: NativeSubscriptionSnapshot) {
 }
 function bridge(): State {
 	const global = globalThis as typeof globalThis & { [KEY]?: State };
-	if (!global[KEY]) {
-		const state: State = { statuses: new Map(), models: new Map(), pending: new Map(), controllers: new Map(), listeners: new Set(), counter: 0 };
-		global[KEY] = state;
-		process.on("message", (raw: unknown) => {
-			const message = raw as { channel?: string; op?: string; id?: string; ok?: boolean; value?: unknown; error?: string; snapshot?: NativeSubscriptionSnapshot };
-			if (!desktopConnected() || message?.channel !== "lh:subscriptions") return;
-			if (message.op === "changed" && message.snapshot) accept(state, message.snapshot);
-			if (!message.id) return;
-			const pending = state.pending.get(message.id);
-			if (!pending || pending.op !== message.op) return;
-			clearTimeout(pending.timer); state.pending.delete(message.id);
-			if (message.ok) pending.resolve(message.value);
-			else pending.reject(new Error(message.error ?? "Subscription connection failed."));
-		});
-		process.on("disconnect", () => {
-			invalidate(state);
-			for (const pending of state.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error("The desktop connection closed.")); }
-			state.pending.clear(); notify(state);
-		});
-	}
+	global[KEY] ??= { statuses: new Map(), models: new Map(), host: null, controllers: new Map(), listeners: new Set() };
 	return global[KEY];
 }
-export function subscriptionRequest<T>(op: "snapshot" | "lease", fields: Record<string, unknown> = {}): Promise<T> {
+/** Install the credential host. Returns the disconnect, which fails every
+ * in-flight stream closed exactly like a lost host. */
+export function connectSubscriptionHost(host: SubscriptionHost): () => void {
 	const state = bridge();
-	if (!desktopConnected()) return Promise.reject(new Error("Subscription sign-in is available only in the desktop app with a private server connection."));
-	return new Promise<T>((resolve, reject) => {
-		const id = `${process.pid}:${++state.counter}`;
-		const timer = setTimeout(() => { state.pending.delete(id); reject(new Error("The subscription desktop connection timed out.")); }, 45000);
-		state.pending.set(id, { op, timer, resolve: (value) => resolve(value as T), reject });
-		process.send!({ ...fields, channel: "lh:subscriptions", id, op }, (error) => {
-			if (error) { clearTimeout(timer); state.pending.delete(id); reject(new Error("The subscription desktop connection closed.")); }
-		});
-	});
+	state.host = host;
+	return () => {
+		if (state.host !== host) return;
+		state.host = null;
+		invalidate(state); notify(state);
+	};
+}
+/** Host change notifications, in emission order. */
+export function acceptSubscriptionChange(snapshot: NativeSubscriptionSnapshot): void {
+	const state = bridge();
+	if (state.host) accept(state, snapshot);
+}
+export async function subscriptionRequest<T>(op: "snapshot" | "lease", fields: Record<string, unknown> = {}): Promise<T> {
+	const host = bridge().host;
+	if (!host) throw new Error("Subscription connections are unavailable in this process.");
+	return await host.request(op, fields) as T;
 }
 export async function refreshSubscriptionModels(): Promise<void> {
 	const state = bridge();
-	if (!desktopConnected()) { invalidate(state); return; }
+	if (!hostConnected()) { invalidate(state); return; }
 	try { accept(state, await subscriptionRequest<NativeSubscriptionSnapshot>("snapshot")); }
 	catch { invalidate(state); notify(state); }
 }
 export function nativeSubscriptionStatus(providerId: NativeSubscriptionProviderId): NativeSubscriptionStatus | undefined { return bridge().statuses.get(providerId); }
 export function nativeSubscriptionConnected(providerId: NativeSubscriptionProviderId): boolean {
 	const status = nativeSubscriptionStatus(providerId);
-	return desktopConnected() && status?.available === true && status.connected && !!status.connectionId;
+	return hostConnected() && status?.available === true && status.connected && !!status.connectionId;
 }
 export function nativeSubscriptionBackgroundAllowed(providerId: NativeSubscriptionProviderId): boolean { return nativeSubscriptionConnected(providerId) && nativeSubscriptionStatus(providerId)?.allowBackgroundUse === true; }
-export function nativeSubscriptionModels(): Model<Api>[] { return desktopConnected() ? [...bridge().models.values()].flat() : []; }
+export function nativeSubscriptionModels(): Model<Api>[] { return hostConnected() ? [...bridge().models.values()].flat() : []; }
 export function nativeSubscriptionModel(logicalId: string, modelId: string): Model<Api> | undefined { return nativeSubscriptionModels().find((m) => m.provider === logicalId && m.id === modelId); }
 export function onNativeSubscriptionChange(listener: () => void): () => void { const state = bridge(); state.listeners.add(listener); return () => { state.listeners.delete(listener); }; }
 export function subscriptionScope(providerId: NativeSubscriptionProviderId, selectedModelId: string): NativeSubscriptionScope {

@@ -6,9 +6,9 @@ import { NATIVE_SUBSCRIPTIONS, type NativeSubscriptionSnapshot } from "../src/co
 import { refreshSubscriptionModels, nativeSubscriptionModels, subscriptionAbortController, subscriptionRequest } from "../src/agent/subscription-bridge.ts";
 import { subscriptionHistory } from "../src/agent/subscription-stream.ts";
 import { runSubagent } from "../src/agent/subagents/pi-run.ts";
+import { fakeConnectionHost } from "./fake-connection-host.ts";
 
-const originalSend = Object.getOwnPropertyDescriptor(process, "send"), originalConnected = Object.getOwnPropertyDescriptor(process, "connected");
-const marker = process.env.LH_DESKTOP_SERVER, secret = process.env.LH_DESKTOP_API_SECRET;
+let host: ReturnType<typeof fakeConnectionHost>;
 const xaiKey = process.env.XAI_API_KEY, copilotKey = process.env.COPILOT_GITHUB_TOKEN;
 let revision = 1, denied = false, sends = 0;
 const context = normalizeContext({ messages: [{ role: "user", content: "Offline fixture", timestamp: 0 }] });
@@ -18,21 +18,17 @@ function snapshot(background = true): NativeSubscriptionSnapshot {
 		models: Object.fromEntries(NATIVE_SUBSCRIPTIONS.map((p) => [p.providerId, piModels().getModels(p.providerId)])),
 	};
 }
-const emit = (value: unknown) => (process.emit as (event: string, value: unknown) => boolean)("message", value);
+const emit = (value: unknown) => host.deliver(value);
 before(async () => {
-	process.env.LH_DESKTOP_SERVER = "1"; process.env.LH_DESKTOP_API_SECRET = "d".repeat(64);
 	process.env.XAI_API_KEY = "fixture-must-never-be-used"; process.env.COPILOT_GITHUB_TOKEN = "fixture-api-route-only";
-	Object.defineProperty(process, "connected", { configurable: true, value: true });
-	Object.defineProperty(process, "send", { configurable: true, value: (message: any, callback?: () => void) => {
+	host = fakeConnectionHost("lh:subscriptions", (message) => {
 		sends++; queueMicrotask(() => emit({ channel: "lh:subscriptions", id: message.id, op: message.op, ...(denied && message.op === "lease" ? { ok: false, error: "fixture expired refresh" } : { ok: true, value: message.op === "snapshot" ? snapshot() : { scope: message.scope, auth: { apiKey: "fixture-oauth-only", ...(message.scope.providerId === "github-copilot" ? { baseUrl: "https://api.business.githubcopilot.com", headers: { "x-fixture-auth": "native-retained" } } : {}) } } }) }));
-		callback?.(); return true;
-	} });
+	});
 	await refreshSubscriptionModels();
 });
 after(() => {
-	if (originalSend) Object.defineProperty(process, "send", originalSend); else delete process.send;
-	if (originalConnected) Object.defineProperty(process, "connected", originalConnected); else delete (process as { connected?: boolean }).connected;
-	for (const [key, value] of [["LH_DESKTOP_SERVER", marker], ["LH_DESKTOP_API_SECRET", secret], ["XAI_API_KEY", xaiKey], ["COPILOT_GITHUB_TOKEN", copilotKey]]) { if (value === undefined) delete process.env[key!]; else process.env[key!] = value; }
+	host.disconnect();
+	for (const [key, value] of [["XAI_API_KEY", xaiKey], ["COPILOT_GITHUB_TOKEN", copilotKey]]) { if (value === undefined) delete process.env[key!]; else process.env[key!] = value; }
 });
 test("logical subscription routes are separate catalog entries without rewriting native API models", () => {
 	for (const p of NATIVE_SUBSCRIPTIONS) {
@@ -100,8 +96,7 @@ test("background invalidation is provider-specific and preserves foreground cont
 	const stale = snapshot(); stale.statuses.forEach((s) => { s.revision = 0; }); emit({ channel: "lh:subscriptions", op: "changed", snapshot: stale });
 	foreground.release(); background.release(); other.release();
 });
-test("framework IPC alone cannot request subscription credentials or retain a usable catalog", async () => {
-	const previous = sends; delete process.env.LH_DESKTOP_SERVER;
-	await assert.rejects(subscriptionRequest("snapshot"), /desktop app/); assert.equal(sends, previous); assert.deepEqual(nativeSubscriptionModels(), []);
-	process.env.LH_DESKTOP_SERVER = "1";
+test("without a connection host nothing can request subscription credentials or retain a usable catalog", async () => {
+	const previous = sends; host.disconnect();
+	await assert.rejects(subscriptionRequest("snapshot"), /unavailable/); assert.equal(sends, previous); assert.deepEqual(nativeSubscriptionModels(), []);
 });

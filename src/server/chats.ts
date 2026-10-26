@@ -20,6 +20,21 @@ import { isTurnRunning } from "./turn-liveness.ts";
 
 export const { createChat, getChat, listChats } = stores.chatStore;
 export { titleFromPrompt };
+
+/** PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
+ *  thinking level from birth — stamped verbatim from the STRONG slot. No
+ *  strong slot configured (fresh BYOK boot) → no stamp; the turn gate's
+ *  503 models_not_configured envelope refuses honestly until setup fills
+ *  it. Shared by new sessions and topic conversations. */
+export function stampSessionModel(chatId: string): void {
+	const strong = stores.settingsStore.readSettings()?.models?.strong;
+	if (strong?.model) {
+		stores.chatStore.saveSettings(chatId, {
+			model: { provider: strong.model.provider, id: strong.model.id },
+			thinkingLevel: strong.thinkingLevel,
+		});
+	}
+}
 export type { ChatDeleteMode, ChatDeletionStats } from "../core/graph-deletion.ts";
 
 /** How long the wind-down wait may take before the caller gets a retryable

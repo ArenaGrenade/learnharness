@@ -1,18 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-const require = createRequire(import.meta.url);
-const { createChatGPT, fileStore } = require("../electron/chatgpt.cjs");
+import { createChatGPT as createService, fileStore as typedFileStore } from "../src/server/connections/chatgpt.ts";
+/** Loose-typed for scratch states (the service validates every record). */
+const createChatGPT = (options: any): any => createService(options);
+const fileStore = (file: string): any => typedFileStore(file);
 const initial = () => ({ version: 1, hostId: "urn:uuid:scratch-host", activeId: null, registrations: [] });
 const account = (id: string, subject: string) => ({
 	id, clientId: `oaiapp_${id}`, issuer: "https://auth.openai.com", subject, email: `${subject}@example.invalid`,
 	tokens: { accessToken: `scratch-access-${id}`, refreshToken: `scratch-refresh-${id}`, idToken: `scratch-id-${id}`, expiresAt: Date.now() + 3600000, scopes: ["openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct"] },
 });
 function service(store: unknown) {
-	return createChatGPT({ store, openExternal: () => assert.fail("no browser sign-in expected"), fetch: () => assert.fail("no provider request expected") });
+	return createChatGPT({ store, fetch: () => assert.fail("no provider request expected") });
 }
 
 test("ordinary startup restores saved accounts and global OFF from JSON without OAuth or native storage", async () => {
@@ -117,9 +118,9 @@ test("file read/write failures are sanitized and cannot leak credential or path 
 	} finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test("desktop wiring uses only the private JSON path, with no Electron safeStorage dependency", async () => {
-	const main = await fs.readFile(new URL("../electron/main.cjs", import.meta.url), "utf8");
-	const auth = await fs.readFile(new URL("../electron/chatgpt.cjs", import.meta.url), "utf8");
-	assert.match(main, /store: fileStore\(path\.join\(app\.getPath\("userData"\), "chatgpt-credentials\.json"\)\)/);
-	assert.doesNotMatch(main + auth, /safeStorage|encryptedStore|chatgpt-credentials\.enc\.json/);
+test("server wiring uses only the private JSON path under the credentials directory", async () => {
+	const host = await fs.readFile(new URL("../src/server/connections/host.ts", import.meta.url), "utf8");
+	const auth = await fs.readFile(new URL("../src/server/connections/chatgpt.ts", import.meta.url), "utf8");
+	assert.match(host, /store: chatGPTFileStore\(path\.join\(PATHS\.credentials, "chatgpt-credentials\.json"\)\)/);
+	assert.doesNotMatch(host + auth, /safeStorage|encryptedStore|chatgpt-credentials\.enc\.json/);
 });

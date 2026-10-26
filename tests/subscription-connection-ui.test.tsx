@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { parseHTML } from "linkedom";
 import { NativeSubscriptionConnection, NativeSubscriptionUIProvider, SubscriptionConnections, COPILOT_POLICY_NOTICE, emptySubscriptionStatus } from "../components/settings/subscription-connections.tsx";
+import { connectionBridges, httpSubscriptionBridge } from "../components/connection-bridges.ts";
 import { ChatGPTUIProvider } from "../components/settings/chatgpt-connection.tsx";
 import type { NativeSubscriptionControlBridge, NativeSubscriptionProviderId, NativeSubscriptionStatus } from "../src/core/contracts/subscriptions.ts";
 const dom = parseHTML("<html><body></body></html>");
@@ -28,7 +29,7 @@ function fixture(connected = false) {
 		consent: async (id, enabled) => { calls.consent.push([id, enabled]); push(id, { allowBackgroundUse: enabled }); },
 		onChange: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
 	};
-	window.lh = { expandWindow() {}, subscriptions: bridge };
+	connectionBridges.subscriptions = bridge;
 	return { bridge, calls, login, push, get statuses() { return statuses; } };
 }
 async function mount() {
@@ -43,7 +44,7 @@ const toggle = () => dialog().querySelector<HTMLElement>('[role="switch"]')!;
 const footer = () => dialog().querySelector<HTMLElement>('[data-testid="subscription-connection-footer"]')!;
 async function click(element: HTMLElement) { assert(element); await act(async () => element.click()); }
 async function connectionStep(id: string) { await click(button("Connect", row(id))); await click(button("Continue", dialog())); }
-afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; delete window.lh; });
+afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; connectionBridges.subscriptions = httpSubscriptionBridge; });
 
 test("three compact rows render in approved order with no browser-only sign-in or fabricated identities", () => {
 	const html = renderToStaticMarkup(<ChatGPTUIProvider><NativeSubscriptionUIProvider><SubscriptionConnections /></NativeSubscriptionUIProvider></ChatGPTUIProvider>);
@@ -65,7 +66,7 @@ for (const [id, label] of [["github-copilot", "GitHub Copilot"], ["xai", "Grok"]
 	assert.equal(f.calls.login.length, 0); await click(toggle()); assert.deepEqual(f.calls.consent, []);
 	await click(button("Connect", dialog())); assert.deepEqual(f.calls.login, [[id, false]]);
 	assert(dialog().textContent?.includes("PUBLIC-CODE")); assert(!dialog().querySelector('[data-testid="subscription-privacy-notice"]'));
-	await click(button("Open browser", dialog())); assert.deepEqual(f.calls.open, [[id, "attempt", "opaque-action"]]);
+	await click(button("Open sign-in page", dialog())); assert.deepEqual(f.calls.open, [[id, "attempt", "opaque-action"]]);
 	await click(button("Cancel", dialog())); assert.equal(f.calls.cancel, 1); assert(!dialog());
 	await click(button("Connect", row(id === "xai" ? "github-copilot" : "xai"))); const newer = dialog(); await act(async () => f.login.resolve());
 	assert(dialog() === newer, "old completion cannot close another provider dialog");
@@ -111,7 +112,7 @@ test("a non-authority error on a still-working connection does not expose a heal
 	const f = fixture(true); f.push("xai", { error: "The replacement sign-in did not complete." });
 	await mount(); await click(button("Manage…", row("xai"))); assert(!maybeButton("Sign in again", dialog())); assert(!maybeButton("Retry", dialog()));
 });
-test("storage/desktop unavailability is not presented as an authorization repair action", async () => {
+test("storage/server unavailability is not presented as an authorization repair action", async () => {
  const f = fixture(true); await mount(); await click(button("Manage…", row("xai")));
  await act(async () => f.push("xai", { available: false, connected: false, error: "The saved connection could not be read or written safely." }));
  assert(!maybeButton("Sign in again", dialog())); assert(!maybeButton("Retry", dialog())); assert(button("Close", dialog()));

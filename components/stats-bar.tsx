@@ -1,5 +1,6 @@
 "use client";
 
+import { ChatGPTUsageMeter } from "@/components/chatgpt-usage-meter";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { subscriptionLabels, subscriptionLabel, type SessionPricing, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, planCostLabel, prettyModel } from "@/components/usage-format";
@@ -192,6 +193,9 @@ export function StatsBar({
 			{/* The model + thinking control — one controller for the conversation
 			    agents (prober/teacher); the record's `turns` above still folds
 			    the ACTUAL models billed, regardless of what the picker says. */}
+			{/* The live ChatGPT plan meter (web host, 2026-10-26): only while a
+			    ChatGPT model is the conversation's model. */}
+			{selectedModel?.startsWith("chatgpt:") && <ChatGPTUsageMeter />}
 			<ModelControl chatId={chatId} onModelChange={setSelectedModel} />
 		</div>
 	);

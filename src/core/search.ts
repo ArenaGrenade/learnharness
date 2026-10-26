@@ -3,7 +3,7 @@
  *
  * Search engines are pluggable behind ONE seam: the settings record names a
  * preferred engine (agent.search.engine — optional), keys live in the auth
- * store (TAVILY_API_KEY / BRAVE_API_KEY — curated catalog), and the server
+ * store (SEARXNG_URL / TAVILY_API_KEY / BRAVE_API_KEY — curated catalog), and the server
  * composes the live adapter. The Google CSE engine retired with this wave
  * (closed to new customers; dies Jan 2027) — replaced by Tavily + Brave.
  *
@@ -30,8 +30,24 @@ export interface SearchHit {
 	snippet: string;
 }
 
-/** The engine ids this wave ships (the catalog: curated keys + adapters). */
-export type SearchEngineId = "tavily" | "brave";
+/** The engine ids this build ships (the catalog: curated keys + adapters). */
+export type SearchEngineId = "searxng" | "tavily" | "brave";
+
+/** THE ENGINE TABLE, in PREFERENCE order (no pin + several configured →
+ *  the first live engine wins). SearXNG leads (web host, 2026-10-26): a
+ *  self-hosted metasearch instance is local, free and unthrottled. Its
+ *  "key" is the instance's base URL (SEARXNG_URL) — no credential.
+ *  Everything that lists engines (settings parsing, the engine menu, the
+ *  server resolution) reads this one table. */
+export const SEARCH_ENGINES: ReadonlyArray<{ id: SearchEngineId; envVar: string; label: string }> = [
+	{ id: "searxng", envVar: "SEARXNG_URL", label: "SearXNG" },
+	{ id: "tavily", envVar: "TAVILY_API_KEY", label: "Tavily" },
+	{ id: "brave", envVar: "BRAVE_API_KEY", label: "Brave" },
+];
+
+export function isSearchEngineId(value: unknown): value is SearchEngineId {
+	return SEARCH_ENGINES.some((e) => e.id === value);
+}
 
 /** A live search engine: an id (for status/labels) + one operation. The
  *  adapters own their wire protocol (fetch, timeouts, error mapping) —

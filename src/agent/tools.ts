@@ -13,7 +13,7 @@ import {
 	quizInputProblems,
 } from "../core/question-core.ts";
 import { filterEnabledTools, type EnabledTools } from "../core/pending.ts";
-import type { JobRecord } from "../core/contracts.ts";
+import type { ChatTopicTarget, JobRecord } from "../core/contracts.ts";
 import type { JobStore } from "../core/ports.ts";
 import { jobTools, type DemoInput, type PdfInput, type ResearchInput, type VisualInput } from "./tools/jobs.ts";
 import { planTools, type PlanToolContext } from "./tools/plan.ts";
@@ -24,7 +24,8 @@ import { lsTool } from "./tools/ls.ts";
 import { findTool } from "./tools/find.ts";
 import { grepTool } from "./tools/grep.ts";
 import { healToolRecord } from "./tools/heal.ts";
-import type { GraphStore } from "../core/ports.ts";
+import { lessonCompleteTool, topicTools, type TopicToolContext } from "./tools/topic.ts";
+import type { GraphStore, TopicStore } from "../core/ports.ts";
 
 export { jobTools };
 export type { ProbeDoneContext } from "./tools/probe.ts";
@@ -400,6 +401,10 @@ export interface TeacherToolContext extends PlanToolContext {
 	spawn: (job: JobRecord, input: ResearchInput | DemoInput | VisualInput | PdfInput) => void;
 	/** Retained search-status seam; research dispatch is available keylessly. */
 	searchAvailable?: () => boolean;
+	/** A session started from a topic (topics wave, 2026-10-26): adds
+	 *  lesson_complete, which reports back to the topic's evidence log. */
+	topicTarget?: ChatTopicTarget;
+	topicStore?: TopicStore;
 }
 
 /**
@@ -444,8 +449,8 @@ export function createTeacherTools(
 	const quizzing: Record<string, AgentTool<any>> =
 		mechanics === "free" ? { explain: teachExplainToolFor(ctx) } : { quiz: teachQuizToolFor(ctx) };
 	// healToolRecord — same standard as the prober's registry (above).
-	return healToolRecord(
-		filterEnabledTools(
+	return healToolRecord({
+		...filterEnabledTools(
 			{
 			...quizzing,
 			ask_user_question: askUserQuestionTool,
@@ -462,5 +467,47 @@ export function createTeacherTools(
 		},
 		withoutMechanics(enabled),
 		),
-	);
+		// Always-on in targeted sessions: how the lesson reports back.
+		...(ctx.topicTarget && ctx.topicStore ? { lesson_complete: lessonCompleteTool({ chatId: ctx.chatId, target: ctx.topicTarget, topicStore: ctx.topicStore }) } : {}),
+	});
+}
+
+/** What the mapper's tools close over (topics wave, 2026-10-26): the
+ *  topic link + store for the map tools, the prober's job wiring for
+ *  research/pdf, and the gated graph reader. */
+export interface MapperToolContext extends TopicToolContext {
+	chatStore: ProberToolContext["chatStore"];
+	jobStore: JobStore;
+	spawn: ProberToolContext["spawn"];
+	searchAvailable?: () => boolean;
+	graphStore?: GraphStore;
+}
+
+/** The mapper's tool set: the prober's quizzing mechanics (probe, or
+ *  recall under free-recall) + ask + the learner-fs set + research/pdf +
+ *  the gated graph reader + the topic tools (topic_map, map_verdict, and in
+ *  mapping mode map_components / map_done / list_topics). No probe_done:
+ *  a topic conversation never hands off to a teacher. The topic tools are
+ *  re-added after the user-toggle filter — they are how mapping works. */
+export function createMapperTools(ctx: MapperToolContext, enabled?: EnabledTools): Record<string, AgentTool<any>> {
+	const topic = topicTools(ctx);
+	const jobs = jobTools({ chatId: ctx.chatId, jobStore: ctx.jobStore, spawn: ctx.spawn, searchAvailable: ctx.searchAvailable });
+	const quizzing: Record<string, AgentTool<any>> = quizMechanics(enabled) === "free" ? { recall: probeExplainTool } : { probe: probeQuizTool };
+	return healToolRecord({
+		...filterEnabledTools(
+			{
+				...quizzing,
+				ask_user_question: askUserQuestionTool,
+				read: readTool,
+				ls: lsTool,
+				find: findTool,
+				grep: grepTool,
+				...(jobs.research ? { research: jobs.research } : {}),
+				pdf: jobs.pdf!,
+				...(ctx.graphStore ? proberGraphTools({ chatStore: ctx.chatStore, graphStore: ctx.graphStore }) : {}),
+			},
+			withoutMechanics(enabled),
+		),
+		...topic,
+	});
 }

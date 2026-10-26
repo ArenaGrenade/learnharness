@@ -9,7 +9,7 @@
 <p align="center"><strong>An agent harness for learning.</strong></p>
 
 <p align="center">
-  <a href="https://learnharness.ai">Download</a> ·
+  <a href="docs/self-hosting.md">Self-hosting</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="docs/development.md">Documentation</a> ·
   <a href="https://github.com/amosblomqvist/learnharness/issues">Issues</a>
@@ -28,6 +28,8 @@ Instead of just giving you an explanation, it uses your answers and thinking to 
 3. **Teach.** Each step builds on something you already understand. You predict, get an explanation, and check your understanding. Confusions are repaired before anything is built on them. The aim is for the goal to feel obviously true, not merely familiar.
 4. **Practice.** Separate sessions pose varied problems that require the right knowledge to come to mind without being named first. Problems and hints adapt to your reasoning.
 
+**Topics.** For a bigger target ("transformers", "real analysis"), start a topic instead of a session. A mapping conversation makes the goal concrete, lays out every concept it rests on, and probes each one, descending under every gap until it reaches ground you hold, so no subtree is skipped. The topic page shows the map colored by your standing and a **What next** list: misconceptions to repair, check-ups that are due, frontier concepts ready to learn. Each item starts a targeted session or a short check-up, and its results update the map. Held concepts come back for check-ups at widening intervals.
+
 **Think out loud.** The thinking fields let you explain your reasoning, uncertainties, and reactions in your own words. This is how the agent gets a detailed picture rather than just a record of right and wrong answers. You can type or use dictation.
 
 The agent can also research questions in the background, create visual explanations, and build interactive demonstrations.
@@ -36,26 +38,26 @@ The agent can also research questions in the background, create visual explanati
 
 What you are taught accumulates as propositions and reasoning chains: individual claims and the premises that lead to them. The graph shows this structure, with links back to the source sessions. You can also import notes.
 
-Future teaching sessions can read the graph instead of starting from scratch. Practice sessions can draw their material from it. It stores the ideas and their connections, not ratings of your ability.
+Future teaching sessions can read the graph instead of starting from scratch. Practice sessions can draw their material from it. The graph stores the ideas and their connections, not ratings of your ability; your measured standing lives on topic maps, per concept.
 
 ![LearnHarness knowledge graph](docs/assets/knowledge-graph.png)
 
-## Download and get started
+## Get started
 
-**[Download from learnharness.ai](https://learnharness.ai)** · [GitHub Releases](https://github.com/amosblomqvist/learnharness/releases)
+LearnHarness is a self-hosted web app for one person. It runs on a machine you own, and you open it from any device through a Cloudflare Tunnel or Tailscale, behind a passphrase. See the **[self-hosting guide](docs/self-hosting.md)**.
 
-- **macOS (Apple Silicon):** signed and notarized DMG. Drag the app to Applications.
-- **Windows (x64):** run the installer. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
-- **Linux (x64):** make the AppImage executable and open it, or install the Debian/Ubuntu `.deb`.
+```bash
+npm ci && npm run build
+npm run set-passphrase
+npm start                  # 127.0.0.1:3000 — expose it through your tunnel
+```
 
-Add your provider API key and choose your models, then start a session with what you want to understand. LearnHarness supports 30+ provider options, including OpenAI, Anthropic, Google, DeepSeek, and OpenRouter. Optional dictation and web search use separate service keys.
-
-All three platforms support in-app updates.
+Connect your ChatGPT plan (or GitHub Copilot / Grok, or add a provider API key) and choose your models, then start a session with what you want to understand. LearnHarness supports 30+ provider options, including OpenAI, Anthropic, Google, DeepSeek, and OpenRouter. Optional dictation and web search use separate service keys.
 
 ## Your keys, your data
 
 - **Your keys and models.** No LearnHarness subscription or markup. You pay your providers for usage; a live cost meter shows model costs.
-- **Local storage.** Your chats, graph, settings, and API keys live on your machine. Learning records are plain files you can inspect.
+- **Local storage.** Your chats, graph, settings, credentials, and API keys live on your server. Learning records are plain files you can inspect.
 - **External services.** Models run through your configured providers. Model requests send the context needed for the task; web research and dictation also contact external services. Local storage does not mean offline processing.
 - **Inspectable behavior.** System prompts are visible and editable. The app is open source under the AGPL-3.0 license.
 
@@ -67,7 +69,7 @@ npm run dev        # http://localhost:3000
 npm test           # deterministic, no LLM, no network
 ```
 
-See the [development guide](docs/development.md), [architecture](docs/architecture.md), and [desktop release guide](docs/desktop-release.md).
+See the [development guide](docs/development.md), [architecture](docs/architecture.md), and [self-hosting guide](docs/self-hosting.md). Development servers need a passphrase too (`npm run set-passphrase`).
 
 Questions, bug reports, and feature requests: [GitHub Issues](https://github.com/amosblomqvist/learnharness/issues).
 

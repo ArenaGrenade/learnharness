@@ -3,15 +3,17 @@ import test from "node:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createRequire } from "node:module";
 import { createModels, type OAuthCredential, type ProviderAuthInteraction } from "@earendil-works/pi-ai";
 import { githubCopilotProvider } from "@earendil-works/pi-ai/providers/github-copilot";
 import { xaiProvider } from "@earendil-works/pi-ai/providers/xai";
 import type { NativeSubscriptionScope } from "../src/core/contracts/subscriptions.ts";
-const require = createRequire(import.meta.url);
-const { createSubscriptions, loadSubscriptionSDK, validEndpoint, publicError } = require("../electron/subscriptions.cjs");
-const { fileStore, validateState } = require("../electron/subscription-store.cjs");
-const { subscriptionControl } = require("../electron/subscription-ipc.cjs");
+import { createSubscriptions as createService, loadSubscriptionSDK, validEndpoint, publicError } from "../src/server/connections/subscriptions.ts";
+import { fileStore as typedFileStore, validateState } from "../src/server/connections/subscription-store.ts";
+import { subscriptionControl as typedControl } from "../src/server/connections/host.ts";
+/** Loose-typed for scratch fixtures (the service validates every value). */
+const createSubscriptions = (options: any): any => createService(options);
+const fileStore = (file: string, id: string, io?: any): any => typedFileStore(file, id as never, io);
+const subscriptionControl = (command: unknown, controller: any): Promise<any> => typedControl(command, controller);
 const ids = ["github-copilot", "xai"] as const;
 const credential = (id: string, expires = Date.now() + 3600000): OAuthCredential => ({ type: "oauth", access: id === "xai" ? "fixture-xai-access" : "tid=fixture;proxy-ep=proxy.individual.githubcopilot.com;", refresh: "fixture-refresh", expires, ...(id === "github-copilot" ? { availableModelIds: [githubCopilotProvider().getModels()[0]!.id] } : {}) });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { resolve, promise }; }
@@ -23,17 +25,17 @@ async function fixture(options: { login?: (id: string, interaction: ProviderAuth
 		return { ...native, auth: { ...native.auth, oauth: { ...native.auth.oauth!, login: (interaction: ProviderAuthInteraction) => options.login?.(id, interaction) ?? Promise.resolve(credential(id)), refresh: async (value: OAuthCredential, signal: AbortSignal) => { refreshes++; return options.refresh?.(id, value, signal) ?? { ...credential(id), refresh: "fixture-rotated" }; } } } };
 	};
 	const sdk = { createModels, githubCopilotProvider: () => factory("github-copilot"), xaiProvider: () => factory("xai") };
-	const updates: any[] = [], opened: string[] = [];
-	const controller = createSubscriptions({ directory, sdk, stores: options.stores, openExternal: async (url: string) => { opened.push(url); }, onChange: (snapshot: unknown) => updates.push(snapshot) });
+	const updates: any[] = [];
+	const controller = createSubscriptions({ directory, sdk, stores: options.stores, onChange: (snapshot: unknown) => updates.push(snapshot) });
 	await controller.ready;
 	const scope = async (id: string): Promise<NativeSubscriptionScope> => {
 		const snapshot = await controller.snapshot(), status = snapshot.statuses.find((s: any) => s.providerId === id), model = snapshot.models[id][0];
 		return { providerId: id as NativeSubscriptionScope["providerId"], connectionId: status.connectionId, epoch: status.epoch, authorityRevision: status.authorityRevision, selectedModelId: model.id };
 	};
-	return { controller, directory, sdk, opened, updates, scope, get refreshes() { return refreshes; }, async cleanup() { controller.close(); await fs.rm(directory, { recursive: true, force: true }); } };
+	return { controller, directory, sdk, updates, scope, get refreshes() { return refreshes; }, async cleanup() { controller.close(); await fs.rm(directory, { recursive: true, force: true }); } };
 }
-test("main loader resolves Pi's import-only PUBLIC package exports and native OAuth without a CLI or network", async () => {
-	const sdk = await loadSubscriptionSDK(path.resolve(import.meta.dirname, ".."));
+test("server loader resolves Pi's PUBLIC package exports and native OAuth without a CLI or network", async () => {
+	const sdk: any = await loadSubscriptionSDK();
 	assert.equal(typeof sdk.createModels, "function");
 	for (const [id, factory] of [["github-copilot", sdk.githubCopilotProvider], ["xai", sdk.xaiProvider]] as const) {
 		const provider = factory(), store = new sdk.InMemoryCredentialStore(); await store.modify(id, () => credential(id));
@@ -55,7 +57,7 @@ for (const id of ids) test(`${id}: independent default-ON file, restart, explici
 		assert.equal(result.auth.apiKey, saved.credential.access);
 		if (id === "github-copilot") assert.equal(result.auth.baseUrl, "https://api.individual.githubcopilot.com");
 		await assert.rejects(f.controller.lease(scope, true), (error: any) => error.code === "background");
-		const reloaded = createSubscriptions({ directory: f.directory, sdk: f.sdk, openExternal: async () => {} }); await reloaded.ready;
+		const reloaded = createSubscriptions({ directory: f.directory, sdk: f.sdk }); await reloaded.ready;
 		assert.equal((await reloaded.status()).find((s: any) => s.providerId === id).connectionId, saved.connectionId); reloaded.close();
 		await f.controller.disconnect(id); await assert.rejects(f.controller.lease(scope, false));
 		const removed = JSON.parse(await fs.readFile(path.join(f.directory, `${id}-credentials.json`), "utf8"));
@@ -84,14 +86,15 @@ test("background changes retain foreground scope; replacement and disconnect inv
 		await f.controller.login("xai", false); assert.notEqual((await f.scope("xai")).connectionId, scope.connectionId); await assert.rejects(f.controller.lease(scope, false));
 	} finally { await f.cleanup(); }
 });
-test("device interaction exposes only public code and opaque browser action; cancellation cannot commit late success", async () => {
+test("device interaction exposes only public code and an opaque browser action resolved on request; cancellation cannot commit late success", async () => {
 	const done = deferred<OAuthCredential>();
 	const f = await fixture({ login: async (_id, interaction) => { interaction.notify({ type: "device_code", userCode: "PUBLIC-CODE", verificationUri: "https://auth.x.ai/device?user_code=PUBLIC-CODE" }); return done.promise; } });
 	try {
 		const pending = f.controller.login("xai", true); await new Promise((resolve) => setImmediate(resolve));
 		const status = (await f.controller.status()).find((s: any) => s.providerId === "xai"), interaction = status.interaction;
 		assert.equal(interaction.userCode, "PUBLIC-CODE"); assert(!JSON.stringify(status).includes("device_code"));
-		await f.controller.open("xai", interaction.attemptId, interaction.browser.id); assert.equal(f.opened.length, 1);
+		assert.equal(interaction.browser.url, "https://auth.x.ai/device", "status shows the page, never its query");
+		assert.deepEqual(await f.controller.open("xai", interaction.attemptId, interaction.browser.id), { url: "https://auth.x.ai/device?user_code=PUBLIC-CODE" });
 		await assert.rejects(f.controller.open("xai", "old", interaction.browser.id));
 		f.controller.cancel("xai"); done.resolve(credential("xai")); await pending;
 		assert.equal((await f.controller.status()).find((s: any) => s.providerId === "xai").connected, false);
@@ -154,16 +157,16 @@ test("a malformed returned rotation fails closed and cannot retry with the pre-r
 		assert(!(await f.controller.status()).find((s: any) => s.providerId === "xai").available);
 	} finally { await f.cleanup(); }
 });
-test("renderer controls cannot obtain a request lease or internal snapshot", async () => {
+test("HTTP controls cannot obtain a request lease or internal snapshot", async () => {
 	const f = await fixture();
-	try { for (const op of ["lease", "snapshot", "read", "getAuth"]) await assert.rejects(subscriptionControl({ op }, f.controller)); }
+	try { for (const op of ["lease", "snapshot", "read", "getAuth"]) assert.equal(typeof (await subscriptionControl({ op, providerId: "xai" }, f.controller)).error, "string"); }
 	finally { await f.cleanup(); }
 });
 test("corrupt files isolate providers and are preserved; malformed Copilot model metadata never grants all models", async () => {
 	const f = await fixture();
 	try {
 		const file = path.join(f.directory, "github-copilot-credentials.json"); await fs.writeFile(file, "{broken", { mode: 0o600 });
-		const reloaded = createSubscriptions({ directory: f.directory, sdk: f.sdk, openExternal: async () => {} }); await reloaded.ready;
+		const reloaded = createSubscriptions({ directory: f.directory, sdk: f.sdk }); await reloaded.ready;
 		const statuses = await reloaded.status(); assert(!statuses.find((s: any) => s.providerId === "github-copilot").available); assert(statuses.find((s: any) => s.providerId === "xai").available);
 		await assert.rejects(reloaded.login("github-copilot", true)); assert.equal(await fs.readFile(file, "utf8"), "{broken"); reloaded.close();
 		assert.throws(() => validateState("github-copilot", { version: 1, allowBackgroundUse: true, connectionId: "b5ac22b7-dfe3-4e52-ae0a-6da2990d4aef", credential: { ...credential("github-copilot"), availableModelIds: [123] } }));
@@ -191,13 +194,18 @@ test("disconnect during refresh cannot resurrect credentials or replace disconne
 		assert.deepEqual(JSON.parse(await fs.readFile(path.join(f.directory, "xai-credentials.json"), "utf8")), { version: 1, allowBackgroundUse: true });
 	} finally { await f.cleanup(); }
 });
-test("pause during refresh saves returned rotation but refuses the request; resume uses durable refreshed state", async () => {
+test("close during refresh saves returned rotation but refuses the request; a restart uses durable refreshed state", async () => {
 	const rotation = deferred<OAuthCredential>(); const f = await fixture({ login: async (id) => credential(id, 0), refresh: () => rotation.promise });
 	try {
 		await f.controller.login("xai", true); const scope = await f.scope("xai"); const lease = f.controller.lease(scope, false).then(() => false, () => true);
-		await new Promise((resolve) => setImmediate(resolve)); f.controller.pause(); rotation.resolve({ ...credential("xai"), refresh: "rotation-survives-pause" }); assert(await lease);
-		const saved = JSON.parse(await fs.readFile(path.join(f.directory, "xai-credentials.json"), "utf8")); assert.equal(saved.credential.refresh, "rotation-survives-pause");
-		f.controller.resume(); await f.controller.lease(await f.scope("xai"), false); assert.equal(f.refreshes, 1);
+		await new Promise((resolve) => setImmediate(resolve)); f.controller.close(); rotation.resolve({ ...credential("xai"), refresh: "rotation-survives-close" }); assert(await lease);
+		const saved = JSON.parse(await fs.readFile(path.join(f.directory, "xai-credentials.json"), "utf8")); assert.equal(saved.credential.refresh, "rotation-survives-close");
+		const restarted = createSubscriptions({ directory: f.directory, sdk: f.sdk }); await restarted.ready;
+		try {
+			const snapshot = await restarted.snapshot(), status = snapshot.statuses.find((s: any) => s.providerId === "xai");
+			await restarted.lease({ providerId: "xai", connectionId: status.connectionId, epoch: status.epoch, authorityRevision: status.authorityRevision, selectedModelId: snapshot.models.xai[0].id }, false);
+			assert.equal(f.refreshes, 1);
+		} finally { restarted.close(); }
 	} finally { await f.cleanup(); }
 });
 test("enterprise domains are preserved; derived endpoints and control errors are guarded", async () => {
@@ -205,7 +213,8 @@ test("enterprise domains are preserved; derived endpoints and control errors are
 	validateState("github-copilot", { version: 1, allowBackgroundUse: true, connectionId: "b5ac22b7-dfe3-4e52-ae0a-6da2990d4aef", credential: value });
 	assert(validEndpoint("github-copilot", { apiKey: "fixture", baseUrl: "https://copilot-api.company.ghe.com" }, value));
 	for (const baseUrl of ["http://api.individual.githubcopilot.com", "https://attacker.example/", "https://user:pass@api.individual.githubcopilot.com", "https://api.individual.githubcopilot.com/path"]) assert(!validEndpoint("github-copilot", { apiKey: "fixture", baseUrl }, value));
-	await assert.rejects(subscriptionControl({ op: "status" }, { status: async () => { throw new Error("private-token-response"); } }), (error: Error) => !error.message.includes("private-token-response"));
+	const failed = await subscriptionControl({ op: "status" }, { status: async () => { throw new Error("private-token-response"); } });
+	assert.equal(typeof failed.error, "string"); assert(!failed.error.includes("private-token-response"));
 	assert(!publicError(new Error("private-token-response")).includes("private-token-response"));
 });
 test("atomic store failed rename preserves original and leaves no temporary files", async () => {

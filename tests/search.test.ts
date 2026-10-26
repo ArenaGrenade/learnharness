@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { resolveSearchEngineFor, tavilyProvider, braveProvider } from "../src/server/search.ts";
+import { resolveSearchEngineFor, tavilyProvider, braveProvider, searxngProvider } from "../src/server/search.ts";
 
 describe("resolveSearchEngineFor (the auto-detect decision)", () => {
 	it("no keys: honestly unavailable, no default", () => {
@@ -56,7 +56,45 @@ describe("resolveSearchEngineFor (the auto-detect decision)", () => {
 		assert.ok(!out.available);
 		assert.equal(out.engine, null);
 		assert.match(out.reason, /tavily/);
-		assert.match(out.reason, /API key is missing/);
+		assert.match(out.reason, /not configured/);
+	});
+
+	it("SearXNG leads the preference order when several engines are configured", () => {
+		const out = resolveSearchEngineFor(undefined, { searxng: "http://127.0.0.1:9180", tavily: "tvly-throwaway-key-000001" });
+		assert.equal(out.engine, "searxng");
+		assert.equal(out.key, "http://127.0.0.1:9180");
+		assert.equal(resolveSearchEngineFor(undefined, { tavily: "tvly-throwaway-key-000001" }).engine, "tavily");
+	});
+});
+
+describe("searxngProvider (wire shape verified against a live instance, 2026-10-26)", () => {
+	it("GETs <base>/search with format=json and maps results, capped at count", async () => {
+		let seen = "";
+		const provider = searxngProvider("http://127.0.0.1:9180", async (url) => {
+			seen = url;
+			return Response.json({ results: [
+				{ title: "Attention Is All You Need", url: "https://arxiv.org/abs/1706.03762", content: "line one\nline two" },
+				{ title: "no url" },
+				{ title: "B", url: "https://b.example", content: "b" },
+				{ title: "C", url: "https://c.example", content: "c" },
+			] });
+		});
+		const hits = await provider.search("attention", 2);
+		const url = new URL(seen);
+		assert.equal(url.origin + url.pathname, "http://127.0.0.1:9180/search");
+		assert.equal(url.searchParams.get("q"), "attention");
+		assert.equal(url.searchParams.get("format"), "json");
+		assert.deepEqual(hits, [
+			{ title: "Attention Is All You Need", url: "https://arxiv.org/abs/1706.03762", snippet: "line one line two" },
+			{ title: "B", url: "https://b.example", snippet: "b" },
+		]);
+	});
+
+	it("keeps a base path and explains a refused json format", async () => {
+		let seen = "";
+		const provider = searxngProvider("https://search.example/searx/", async (url) => { seen = url; return new Response("Forbidden", { status: 403 }); });
+		await assert.rejects(provider.search("x", 5), /SearXNG 403 \(is format=json enabled/);
+		assert.equal(new URL(seen).pathname, "/searx/search");
 	});
 });
 

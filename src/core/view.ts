@@ -355,6 +355,16 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "topic-target": {
+			// A session started from a topic (topics wave, 2026-10-26): a
+			// small card above the first user message, like graph-context.
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-topic-target", id: `tt_${marker.id}`, data: marker.details }],
+			});
+			return;
+		}
 		case "probe-handoff": {
 			out.push({
 				id: marker.id,

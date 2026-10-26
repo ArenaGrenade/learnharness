@@ -1,5 +1,7 @@
+import { openAlphaxivTools } from "./mcp/alphaxiv.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import {
+	createMapperAgent,
 	createPracticeAgent,
 	createProberAgent,
 	createTeacherAgent,
@@ -100,6 +102,9 @@ const jobRunner = createJobRunner({
 	// null = honestly unavailable; the dispatch-level drop (below) uses the
 	// same signal so keyless servers never see the research tool at all.
 	searchProvider,
+	// alphaXiv paper tools (web host, 2026-10-26): opened per research job
+	// when ALPHAXIV_API_KEY is set — read fresh, so a saved key lands next job.
+	researchTools: () => openAlphaxivTools(),
 });
 /** The app's ONE extraction pipeline instance — both front doors share it:
  *  quiz-triggered session runs (turn-service) and notes imports
@@ -250,7 +255,7 @@ export async function handleChatInput(
 				effective.compaction?.thresholdTokens,
 				catalogContextLimits().get(modelIdForCompaction),
 			),
-			systemPromptTokens: Math.ceil(composeInstructions(record.kind === "practice" ? "practice" : "teacher").length / 4),
+			systemPromptTokens: Math.ceil(composeInstructions(record.kind === "practice" ? "practice" : record.kind === "topic" ? "mapper" : "teacher").length / 4),
 		},
 		chatId,
 	);
@@ -395,6 +400,23 @@ export async function handleChatInput(
 	// uniform across kinds).
 	const constructed: TeachingAgent = buildAgent
 		? buildAgent({ ...agentOpts, teaching })
+		: record.kind === "topic" && record.topic
+			// TOPIC BRANCH (topics wave, 2026-10-26): a topic's mapping or
+			// check-up conversation builds the mapper from turn 1 — prober
+			// mechanics + the map tools, no handoff, never extracted.
+			? createMapperAgent(
+					{
+						chatId,
+						link: record.topic,
+						topicStore: stores.topicStore,
+						chatStore: stores.chatStore,
+						jobStore: stores.jobStore,
+						spawn: (job, input) => void jobRunner.runJob(job.id, input),
+						searchAvailable,
+						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
+					},
+					agentOpts,
+				)
 		: record.kind === "practice"
 			? createPracticeAgent(
 					{
@@ -429,6 +451,8 @@ export async function handleChatInput(
 						// The registry drop's signal (2026-09-20): no live engine
 						// = no research tool in the teacher's registry.
 						searchAvailable,
+						// Started from a topic: lesson_complete reports back.
+						...(record.topicTarget ? { topicTarget: record.topicTarget, topicStore: stores.topicStore } : {}),
 					},
 					agentOpts,
 				)
@@ -447,6 +471,8 @@ export async function handleChatInput(
 						// knowledge graph through tools when the gate opens —
 						// graph master switch AND the agent.graphTools toggle.
 						...(graphToolsEnabled(effective) ? { graphStore: stores.graphStore } : {}),
+						// Started from a topic: probe_done carries targetVerdict.
+						...(record.topicTarget ? { topicTarget: record.topicTarget, topicStore: stores.topicStore } : {}),
 					},
 					agentOpts,
 				);
@@ -518,7 +544,7 @@ export async function handleChatInput(
 				// PRACTICE (owner, 2026-10-04): practice sessions write nothing —
 				// no extraction, no graph, no coverage (v1: the session itself
 				// is the deliverable).
-				if ((!requestCycle || requestCycle.dispatched) && record.kind !== "practice" && extractionEnabled(effective.graph)) {
+				if ((!requestCycle || requestCycle.dispatched) && (record.kind ?? "teach") === "teach" && extractionEnabled(effective.graph)) {
 					// Fresh per-turn read of the graph section's chunk budget
 					// (extraction-UX redesign, 2026-09-24): the trigger compares
 					// against it and the pipeline's batches share it.
@@ -579,7 +605,7 @@ export async function handleChatInput(
 								fresh.compaction?.thresholdTokens,
 								catalogContextLimits().get(kickModelId),
 							),
-							systemPromptTokens: Math.ceil(composeInstructions(freshRecord.kind === "practice" ? "practice" : "teacher").length / 4),
+							systemPromptTokens: Math.ceil(composeInstructions(freshRecord.kind === "practice" ? "practice" : freshRecord.kind === "topic" ? "mapper" : "teacher").length / 4),
 						};
 					}, chatId);
 			},

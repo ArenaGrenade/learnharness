@@ -60,6 +60,8 @@ import {
 	COMPACTION_THRESHOLD_FLOOR,
 	MODEL_SLOTS,
 	resolveSettings,
+	SEARCH_ENGINES,
+	type SearchEngineId,
 	type AgentSettings,
 	type CompactionSettings,
 	type GraphSettings,
@@ -83,8 +85,6 @@ const SLOT_META: Record<ModelSlotName, { label: string; roster: string }> = {
 	vision: { label: "Vision", roster: "The assistants that draw and read PDFs" },
 };
 
-/** The search engines this wave ships (src/core/search.ts) + their labels. */
-const SEARCH_ENGINES = ["tavily", "brave"] as const;
 
 /** The owner's final toggleable-tool list (confirm with the user before
  *  changing — the Teacher stream settled this 2026-09-19). */
@@ -162,7 +162,7 @@ export function composeSlotModel(
  *  Pure — exported for tests. */
 export function composeSearchEngine(
 	agent: AgentSettings | undefined,
-	engine: (typeof SEARCH_ENGINES)[number] | null,
+	engine: SearchEngineId | null,
 ): AgentSettings {
 	if (engine === null) {
 		if (!agent?.search) return { ...agent };
@@ -311,7 +311,7 @@ export function AgentSection({
 	const [search, setSearch] = useState<{ available: boolean; engine: string | null; reason: string } | null>(null);
 	/** Which search engines have a key (/api/keys) — the no-keys-anywhere
 	 *  state grays the row; per-engine marks ride the menu rows. */
-	const [engineKeys, setEngineKeys] = useState<Partial<Record<(typeof SEARCH_ENGINES)[number], boolean>>>({});
+	const [engineKeys, setEngineKeys] = useState<Partial<Record<SearchEngineId, boolean>>>({});
 	const [prompts, setPrompts] = useState<{ prober: SegmentInfo[]; teacher: SegmentInfo[] } | null>(null);
 	const [openSegment, setOpenSegment] = useState<string | null>(null);
 	const [segmentDraft, setSegmentDraft] = useState<Record<string, string>>({});
@@ -380,11 +380,8 @@ export function AgentSection({
 		fetch("/api/keys")
 			.then((r) => r.json())
 			.then((body: { keys: { id: string; present: boolean }[] }) => {
-				const present: Partial<Record<(typeof SEARCH_ENGINES)[number], boolean>> = {};
-				for (const id of SEARCH_ENGINES) {
-					const envVar = id === "tavily" ? "TAVILY_API_KEY" : "BRAVE_API_KEY";
-					present[id] = body.keys.some((k) => k.id === envVar && k.present);
-				}
+				const present: Partial<Record<SearchEngineId, boolean>> = {};
+				for (const { id, envVar } of SEARCH_ENGINES) present[id] = body.keys.some((k) => k.id === envVar && k.present);
 				setEngineKeys(present);
 			})
 			.catch(() => {});
@@ -475,7 +472,7 @@ export function AgentSection({
 
 		/** The search-engine menu row — label + the quiet live-key mark. */
 	const engineOption = (
-		id: (typeof SEARCH_ENGINES)[number] | "auto",
+		id: SearchEngineId | "auto",
 		label: string,
 		active: boolean,
 		live: boolean | null,
@@ -804,7 +801,7 @@ export function AgentSection({
 				))}
 				{(() => {
 					const engine = agent?.search?.engine ?? null;
-					const anyKey = engineKeys.tavily === true || engineKeys.brave === true;
+					const anyKey = SEARCH_ENGINES.some(({ id }) => engineKeys[id] === true);
 					const open = openMenu?.target === "search";
 					return (
 						<SettingsRow
@@ -815,7 +812,7 @@ export function AgentSection({
 						>
 							<span ref={open ? menuAnchorRef : undefined} className="relative flex items-center gap-2">
 								<MenuTrigger
-									value={engine === "tavily" ? "Tavily" : engine === "brave" ? "Brave" : ""}
+									value={SEARCH_ENGINES.find((e) => e.id === engine)?.label ?? ""}
 									emptyLabel="Automatic"
 									ariaLabel="Search engine"
 									testid="search-engine-trigger"
@@ -835,8 +832,8 @@ export function AgentSection({
 											onSectionChange(composeSearchEngine(agent, null));
 											setOpenMenu(null);
 										})}
-										{SEARCH_ENGINES.map((id) =>
-											engineOption(id, id === "tavily" ? "Tavily" : "Brave", engine === id, engineKeys[id] ?? false, () => {
+										{SEARCH_ENGINES.map(({ id, label }) =>
+											engineOption(id, label, engine === id, engineKeys[id] ?? false, () => {
 												onSectionChange(composeSearchEngine(agent, id));
 												setOpenMenu(null);
 											}),

@@ -1,13 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
-const require = createRequire(import.meta.url);
-const { createChatGPT, fileStore, allowedAuthEndpoint, SCOPES } = require("../electron/chatgpt.cjs");
+import { createChatGPT as createService, fileStore as typedFileStore, allowedAuthEndpoint, SCOPES } from "../src/server/connections/chatgpt.ts";
+const fileStore = (file: string): any => typedFileStore(file);
+/** Loose-typed for scratch states (the service validates every record). */
+const createChatGPT = (options: any): any => createService(options);
 const { privateKey, publicKey } = await generateKeyPair("RS256");
 const jwk = { ...await exportJWK(publicKey), kid: "scratch-key", alg: "RS256", use: "sig" };
 const tokenUrl = "https://auth.openai.com/api/accounts/oauth/token";
@@ -24,7 +25,6 @@ function fixture(options: { state?: any; expires?: number; timeoutMs?: number; t
 	const requests: { url: string; form?: URLSearchParams }[] = [];
 	const service = createChatGPT({
 		store: { async read() { options.read?.(); return structuredClone(saved); }, async write(next: any) { writeCount++; await options.write?.(next); saved = structuredClone(next); } },
-		openExternal: async (value: string) => { url = new URL(value); },
 		timeoutMs: options.timeoutMs ?? 5000,
 		onChange: (push: any) => { options.change?.(push); if (!push.status.pending) changed.resolve(); },
 		fetch: async (target: string, init: RequestInit = {}) => {
@@ -42,6 +42,9 @@ function fixture(options: { state?: any; expires?: number; timeoutMs?: number; t
 			throw new Error("Unexpected network request in scratch fixture");
 		},
 	});
+	// Paste-back: the authorize URL rides the pending status (no browser launch).
+	const rawLogin = service.login;
+	service.login = async (id?: string) => { const status = await rawLogin(id); if (status.signInUrl) url = new URL(status.signInUrl); return status; };
 	const rawLease = service.lease;
 	let discovered: Promise<any> | undefined;
 	service.lease = async (background: boolean) => {
@@ -52,7 +55,12 @@ function fixture(options: { state?: any; expires?: number; timeoutMs?: number; t
 	return { service, rawLease, requests, changed, get url() { return url; }, get saved() { return saved; }, get writeCount() { return writeCount; }, async callback(params: Record<string, string> = {}) {
 		const callback = new URL(url.searchParams.get("redirect_uri")!);
 		callback.search = new URLSearchParams({ state: url.searchParams.get("state")!, code: "scratch-code", client_id: "oaiapp_scratch", ...params }).toString();
-		return fetch(callback);
+		// The pasted address is accepted (or refused) at once; verification and
+		// the durable save continue after, like the old HTTP acknowledgement.
+		const completion = service.complete(callback.toString());
+		completion.catch(() => {});
+		await Promise.race([completion, new Promise((resolve) => setImmediate(resolve))]);
+		return { completion };
 	} };
 }
 async function loggedIn(options: Parameters<typeof fixture>[0] = {}) {
@@ -63,7 +71,7 @@ async function loggedIn(options: Parameters<typeof fixture>[0] = {}) {
 	return f;
 }
 
-test("PKCE/state/nonce/host identity and exact ephemeral 127.0.0.1 callback; no secret renderer snapshot", async () => {
+test("PKCE/state/nonce/host identity and exact ephemeral 127.0.0.1 paste-back callback; no secret client snapshot", async () => {
 	const f = fixture();
 	try {
 		await f.service.login();
@@ -73,7 +81,8 @@ test("PKCE/state/nonce/host identity and exact ephemeral 127.0.0.1 callback; no 
 		assert.equal(params.get("ext_agent_host_id"), f.saved.hostId);
 		assert.equal(new URL(params.get("redirect_uri")!).hostname, "127.0.0.1");
 		assert.equal(new URL(params.get("redirect_uri")!).pathname, "/auth/callback");
-		assert.equal((await f.callback({ state: "wrong" })).status, 400);
+		await assert.rejects(f.callback({ state: "wrong" }), /callback/);
+		assert.equal((await f.service.status()).pending, true, "a refused address keeps the attempt pending");
 		assert.equal(f.requests.length, 0, "unverified callback must never exchange a code");
 		await f.callback(); await f.changed.promise;
 		const form = f.requests.find((r) => r.url === tokenUrl)!.form!;
@@ -125,12 +134,12 @@ for (const [label, claims] of [["nonce", { nonce: "wrong" }], ["issuer", { iss: 
 	});
 }
 
-test("cancel and timeout close the listener without exchanging or replacing an active account", async () => {
+test("cancel and timeout end the attempt without exchanging or replacing an active account", async () => {
 	const f = fixture({ timeoutMs: 30 });
 	try {
-		await f.service.login(); const callback = f.url.searchParams.get("redirect_uri")!;
+		await f.service.login();
 		f.service.cancelLogin();
-		await assert.rejects(fetch(callback));
+		await assert.rejects(f.callback(), /cancelled/);
 		assert.equal(f.saved.activeId, null);
 		const timeout = fixture({ timeoutMs: 15 });
 		try {
@@ -189,7 +198,7 @@ test("rotated-token persistence failure invalidates existing leases and never re
 		assert.equal(f.saved.registrations[0].tokens.refreshToken, "old-refresh", "failed write leaves only the stale predecessor on disk");
 		assert(pushes.some((push) => push.invalidate === "all" && push.stamp.epoch > catalog.epoch));
 		failWrite = false;
-		await f.service.status(); await f.service.models(); f.service.resume(); await f.service.consent(true);
+		await f.service.status(); await f.service.models(); await f.service.consent(true);
 		await assert.rejects(f.rawLease(false, expected)); await assert.rejects(f.rawLease(true, expected));
 		assert.equal((await f.service.status()).accounts[0].connected, false);
 		assert.equal(reads, 1); assert.equal(refreshes, 1, "no stale-token retry after storage recovers");
@@ -300,7 +309,7 @@ for (const holdVerification of [false, true]) test(`invalid rotating replacement
 		try {
 			await restarted.service.status();
 			await restarted.service.select(restricted.id);
-			restarted.service.resume(); await restarted.service.consent(true);
+			await restarted.service.consent(true);
 			await assert.rejects(restarted.service.lease(false));
 			assert.equal((await restarted.service.status()).accounts[0].connected, false);
 			assert.deepEqual((await restarted.service.models()).models, []);
@@ -313,7 +322,7 @@ for (const holdVerification of [false, true]) test(`invalid rotating replacement
 			reconnectArmed = true;
 			await restarted.service.login(restricted.id);
 			assert.equal(sawPending, true);
-			await restarted.callback(); // HTTP acknowledgement precedes verification/save.
+			await restarted.callback(); // Acceptance precedes verification/save.
 			if (holdVerification) {
 				await verificationEntered.promise;
 				assert.equal(completed, false, "the current attempt cannot complete before identity verification");
@@ -337,7 +346,7 @@ for (const holdVerification of [false, true]) test(`invalid rotating replacement
 	} finally { f.service.close(); }
 });
 
-for (const holdVerification of [false, true]) test(`observed file write failure invalidates all work; status, consent and resume cannot reload stale credentials or repair authority${holdVerification ? " (held JWKS regression)" : ""}`, { timeout: 10000 }, async () => {
+for (const holdVerification of [false, true]) test(`observed file write failure invalidates all work; status and consent cannot reload stale credentials or repair authority${holdVerification ? " (held JWKS regression)" : ""}`, { timeout: 10000 }, async () => {
 	let lost = false, reads = 0; const pushes: any[] = [];
 	const reconnectComplete = deferred<any>();
 	const verificationEntered = deferred(), verificationRelease = deferred();
@@ -362,7 +371,7 @@ for (const holdVerification of [false, true]) test(`observed file write failure 
 		await assert.rejects(f.service.consent(false), /storage/);
 		assert(pushes.some((p) => p.invalidate === "all" && p.stamp.epoch > epoch));
 		await assert.rejects(f.service.lease(false)); await assert.rejects(f.service.lease(true));
-		lost = false; f.service.resume(); await f.service.consent(true);
+		lost = false; await f.service.consent(true);
 		await f.service.status(); await f.service.models();
 		await assert.rejects(f.service.lease(false));
 		assert.equal((await f.service.status()).accounts[0].connected, false);
@@ -398,7 +407,7 @@ test("strict JSON schema rejects malformed marker/duplicates/token/active identi
 			const state = structuredClone(f.saved); mutate(state);
 			const bytes = JSON.stringify(state);
 			await fs.writeFile(file, bytes);
-			const service = createChatGPT({ store: fileStore(file), openExternal: () => assert.fail("no OAuth"), fetch: () => assert.fail("no provider") });
+			const service = createChatGPT({ store: fileStore(file), fetch: () => assert.fail("no provider") });
 			try { assert.equal((await service.status()).available, false); await assert.rejects(service.login()); assert.equal(await fs.readFile(file, "utf8"), bytes); }
 			finally { service.close(); }
 		}
@@ -449,8 +458,7 @@ test("repeated real verified sign-in creates one visible account while preservin
 	const f = await loggedIn();
 	try {
 		const original = f.saved.registrations[0];
-		await f.service.login(); await f.callback({ client_id: "oaiapp_repeat" });
-		for (let i = 0; i < 100 && (await f.service.status()).pending; i++) await new Promise((r) => setImmediate(r));
+		await f.service.login(); await (await f.callback({ client_id: "oaiapp_repeat" })).completion;
 		const status = await f.service.status();
 		assert.equal(f.saved.registrations.length, 2); assert.equal(status.accounts.length, 1);
 		assert.equal(status.activeId, status.accounts[0].id); assert.notEqual(status.activeId, original.id);
@@ -594,8 +602,7 @@ test("one app-wide background preference defaults ON over legacy OFF, persists w
 		await f.service.lease(false);
 		const id = f.saved.activeId;
 		await f.service.select(id); assert.equal((await f.service.status()).allowBackgroundUse, false);
-		await f.service.login(id); await f.callback();
-		for (let i = 0; i < 100 && (await f.service.status()).pending; i++) await new Promise((r) => setImmediate(r));
+		await f.service.login(id); await (await f.callback()).completion;
 		assert.equal(f.saved.allowBackgroundUse, false, "reconnecting cannot overwrite app preference");
 		assert.equal(f.saved.registrations[0].background, undefined, "new verified registrations omit obsolete per-account preference");
 		await f.service.disconnect(f.saved.activeId);
@@ -603,8 +610,7 @@ test("one app-wide background preference defaults ON over legacy OFF, persists w
 		const restarted = fixture({ state: f.saved });
 		try {
 			assert.equal((await restarted.service.status()).allowBackgroundUse, false, "zero-account restart preserves global OFF");
-			await restarted.service.login(); await restarted.callback();
-			for (let i = 0; i < 100 && (await restarted.service.status()).pending; i++) await new Promise((r) => setImmediate(r));
+			await restarted.service.login(); await (await restarted.callback()).completion;
 			assert.equal(restarted.saved.allowBackgroundUse, false);
 			await restarted.service.consent(true); assert.equal(restarted.saved.allowBackgroundUse, true);
 		} finally { restarted.service.close(); }

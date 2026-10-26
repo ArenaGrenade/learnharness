@@ -48,6 +48,13 @@ export interface ServerEvents {
 	 *  the chat; the client mirrors it by disabling the composer/dock
 	 *  submit. */
 	"compaction-changed": { chatId: string; running: boolean };
+	/** A subscription connection (ChatGPT, Copilot, Grok) changed: sign-in
+	 *  progress, account selection, consent, catalog. Settings views refetch
+	 *  /api/connections/*; credentials never ride this channel. */
+	"connections-changed": Record<string, never>;
+	/** A topic record changed (topics wave, 2026-10-26): map edits, new
+	 *  evidence, map concluded, created/deleted. Topic views refetch. */
+	"topics-changed": { topicId: string };
 }
 
 export type ServerEventType = keyof ServerEvents;
@@ -63,12 +70,14 @@ export const SERVER_EVENT_TYPES = [
 	"chats-changed",
 	"record-changed",
 	"compaction-changed",
+	"connections-changed",
+	"topics-changed",
 ] as const satisfies readonly ServerEventType[];
 
 /** One notification: the type discriminates the payload. */
 export type ServerEvent<K extends ServerEventType = ServerEventType> = {
-	type: K;
-} & ServerEvents[K];
+	[P in K]: { type: P } & ServerEvents[P];
+}[K];
 
 export type ServerEventListener = (event: ServerEvent) => void;
 

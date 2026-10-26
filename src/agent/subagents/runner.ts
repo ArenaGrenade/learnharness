@@ -1,5 +1,6 @@
 import type { PiEngine } from "../models.ts";
 import type { SearchProvider } from "../../core/search.ts";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	accumulateJobUsage,
 	buildSubagentSteer,
@@ -85,6 +86,11 @@ export interface JobRunnerDeps {
 	 *  reports it as recoverable text). Absent seam (tests) reads the same;
 	 *  research dispatch and web_fetch do not require search credentials. */
 	searchProvider?: () => SearchProvider | null;
+	/** Extra researcher tools opened per research job (web host, 2026-10-26:
+	 *  the alphaXiv paper tools — server/mcp/alphaxiv.ts). null = none
+	 *  configured or the source is unreachable; research runs on the web
+	 *  tools alone. The runner closes the set when the job settles. */
+	researchTools?: () => Promise<{ tools: AgentTool<any>[]; close(): Promise<void> } | null>;
 	/** Key-presence gate (provider-key interlude, 2026-09-25): given the
 	 *  resolved engine's provider + the kind's slot tier, return the
 	 *  refusal envelope when the provider's key is missing (null = run).
@@ -359,13 +365,16 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 		// downloads land here; every pdf tool is scoped to it; it dies with
 		// the job (never enters the record).
 		const pdfDir = await fs.mkdtemp(path.join(os.tmpdir(), "lh-research-"));
+		let extra: { tools: AgentTool<any>[]; close(): Promise<void> } | null = null;
 
 		try {
 			jobStore.updateJob(jobId, { activity: "researching" });
+			extra = (await deps.researchTools?.().catch(() => null)) ?? null;
 			const brief = await runResearcherAgent(prompt, {
 				engine: model,
 				search: deps.searchProvider,
 				pdfDir,
+				extraTools: extra?.tools,
 				abortSignal: loop.abortSignal,
 				chatId: loop.chatId,
 				// Money channel: each agent step is one model call — fold its
@@ -391,6 +400,7 @@ export function createJobRunner(deps: JobRunnerDeps): JobRunner {
 			if (stillRunning(jobId)) jobStore.updateJob(jobId, { error: reason });
 			await finishJob(jobId, { brief: `Research failed: ${reason}`, sources: [] });
 		} finally {
+			await extra?.close();
 			await fs.rm(pdfDir, { recursive: true, force: true });
 		}
 	}
@@ -532,6 +542,7 @@ function isPdfFailure(result: PdfResult): boolean {
 function activityLine(toolName: string, input: { query?: string; url?: string } | undefined): string {
 	if (toolName === "web_search") return `web_search: "${input?.query ?? ""}"`;
 	if (toolName === "web_fetch") return `web_fetch: ${hostOf(input?.url)}`;
+	if (toolName.startsWith("alphaxiv_") && typeof input?.query === "string") return `${toolName}: "${input.query}"`;
 	return toolName;
 }
 

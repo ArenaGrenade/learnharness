@@ -5,12 +5,14 @@ import type { ChatGPTStatus } from "@/src/core";
 import { ConnectionDialog, ConnectionFooter, ConnectionRow } from "./connection-controls";
 import { Button } from "@/components/ui/button";
 import { Toggle } from "./controls";
+import { connectionBridges } from "@/components/connection-bridges";
+import { ChatGPTUsageMeter } from "@/components/chatgpt-usage-meter";
 
-export const CHATGPT_NOTICE = "LearnHarness stores your ChatGPT account details and credentials in an unencrypted local file on this device. When this connection is used, relevant conversation context, learning material, and tool results are sent directly to OpenAI. ChatGPT plan limits apply; any additional credits are authorized and managed in ChatGPT, not LearnHarness.";
+export const CHATGPT_NOTICE = "LearnHarness stores your ChatGPT account details and credentials in an unencrypted file on the computer running this LearnHarness server. When this connection is used, relevant conversation context, learning material, and tool results are sent directly to OpenAI. ChatGPT plan limits apply; any additional credits are authorized and managed in ChatGPT, not LearnHarness.";
 export const CHATGPT_BACKGROUND_HINT = "Background work counts toward your ChatGPT plan usage.";
 const BACKGROUND_LABEL = "Allow background use for all ChatGPT accounts";
 const REVOCATION_WARNING = "Account disconnected locally. Remote revocation could not be confirmed.";
-export const CHATGPT_DISCONNECT_COPY = { title: "Disconnect account?", body: "This removes the saved account and its credentials from this device." };
+export const CHATGPT_DISCONNECT_COPY = { title: "Disconnect account?", body: "This removes the saved account and its credentials from this LearnHarness server." };
 const empty: ChatGPTStatus = { available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: null };
 type Account = ChatGPTStatus["accounts"][number];
 type Dialog = { kind: "connect" } | { kind: "manage"; accountId: string; account: Account; confirm?: boolean } | { kind: "warning" };
@@ -79,14 +81,14 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 			if (attempt.backgroundDirty && next.allowBackgroundUse !== attempt.background) {
 				operation.current = "change";
 				const request = ++statusSequence.current;
-				const result: unknown = await window.lh!.chatgpt!.consent(attempt.background);
+				const result: unknown = await connectionBridges.chatgpt.consent(attempt.background);
 				if (!owns(attempt)) return;
 				if (!isStatus(result)) { setError(replyError(result)); finish(attempt); return; }
 				replyFailure = result.error;
 				let saved: ChatGPTStatus | null;
 				if (request !== statusSequence.current) {
 					const refresh = ++statusSequence.current;
-					const value: unknown = await window.lh!.chatgpt!.status();
+					const value: unknown = await connectionBridges.chatgpt.status();
 					if (!owns(attempt)) return;
 					saved = refresh === statusSequence.current ? publishStatus(value) : statusRef.current;
 				} else saved = publishStatus(result);
@@ -120,16 +122,16 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 	};
 	useEffect(() => {
 		mounted.current = true;
-		const bridge = window.lh?.chatgpt;
+		const bridge = connectionBridges.chatgpt;
 		const refresh = async () => {
 			const request = ++statusSequence.current;
 			try {
-				const next: unknown = await bridge?.status();
+				const next: unknown = await bridge.status();
 				if (next && mounted.current && request === statusSequence.current) receive.current(next);
-			} catch { if (mounted.current && request === statusSequence.current) setError("The desktop connection is unavailable. Retry when the app is ready."); }
+			} catch { if (mounted.current && request === statusSequence.current) setError("The LearnHarness server could not be reached. Retry when it is back."); }
 		};
 		void refresh();
-		const off = bridge?.onChange(() => void refresh());
+		const off = bridge.onChange(() => void refresh());
 		return () => { mounted.current = false; generation.current++; loginAttempt.current = null; off?.(); };
 	}, []);
 
@@ -161,13 +163,13 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 			// Keep cancellation serialized even after login's pending IPC reply.
 			operation.current = "cancel"; setBusy(true);
 			const request = ++statusSequence.current;
-			void window.lh?.chatgpt?.cancel().then(async (value: unknown) => {
+			void connectionBridges.chatgpt.cancel().then(async (value: unknown) => {
 				if (!mounted.current || generation.current !== intent) return;
 				if (!isStatus(value)) { setError(replyError(value)); return; }
 				let next: ChatGPTStatus | null;
 				if (request !== statusSequence.current) {
 					const refresh = ++statusSequence.current;
-					const current: unknown = await window.lh!.chatgpt!.status();
+					const current: unknown = await connectionBridges.chatgpt.status();
 					if (!mounted.current || generation.current !== intent) return;
 					next = refresh === statusSequence.current ? publishStatus(current) : statusRef.current;
 				} else next = publishStatus(value);
@@ -195,7 +197,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 			let next: ChatGPTStatus | null;
 			if (request !== statusSequence.current) {
 				const refresh = ++statusSequence.current;
-				const current: unknown = await window.lh!.chatgpt!.status();
+				const current: unknown = await connectionBridges.chatgpt.status();
 				if (!mounted.current || intent !== generation.current) return;
 				next = refresh === statusSequence.current ? publishStatus(current) : statusRef.current;
 			} else next = publishStatus(value);
@@ -214,9 +216,9 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 		finally { if (intent === generation.current) { operation.current = null; if (mounted.current) setBusy(false); } }
 	}
 	async function login() {
-		const bridge = window.lh?.chatgpt;
+		const bridge = connectionBridges.chatgpt;
 		const owner = dialogRef.current;
-		if (!bridge || operation.current || !status.available || status.pending || owner?.kind !== "connect") return;
+		if (operation.current || !status.available || status.pending || owner?.kind !== "connect") return;
 		const attempt: LoginAttempt = { generation: ++generation.current, dialog: owner, registration, background, backgroundDirty, pending: false, phase: "starting" };
 		loginAttempt.current = attempt; operation.current = "login";
 		const request = ++statusSequence.current;
@@ -238,10 +240,27 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 			if (!next) { finish(attempt); return; }
 			reconcile(next, true);
 		} catch { if (owns(attempt)) { setError(CONTROL_ERROR); finish(attempt); } }
-		// No finally: pending OAuth outlives this IPC promise. Only its status
+		// No finally: pending OAuth outlives this request. Only its status
 		// completion, failure, or explicit cancellation releases the attempt.
 	}
-	const bridge = typeof window !== "undefined" ? window.lh?.chatgpt : undefined;
+	/** Paste-back: the 127.0.0.1 address the browser landed on finishes the
+	 * pending sign-in. A refused address leaves the attempt pending. */
+	async function finishSignIn(callbackUrl: string) {
+		const request = ++statusSequence.current;
+		setError(null);
+		try {
+			const value: unknown = await connectionBridges.chatgpt.complete(callbackUrl);
+			if (!mounted.current) return;
+			if (!isStatus(value)) { setError(replyError(value)); return; }
+			// A newer notification already carries this outcome (or a later one).
+			if (request === statusSequence.current) receive.current(value);
+			// Resumed after a reload: no in-tab attempt owns the dialog, so a
+			// verified completion closes it here (an owned attempt closes in
+			// complete() after applying its background draft).
+			if (!loginAttempt.current && !value.pending && !value.error && value.accounts.some((a) => a.id === value.activeId && a.connected) && dialogRef.current?.kind === "connect") showDialog(null);
+		} catch { if (mounted.current) setError(CONTROL_ERROR); }
+	}
+	const bridge = connectionBridges.chatgpt;
 	const context = {
 		status, busy, error: warning ? null : visibleError, inlineError: dialog || warning ? null : visibleError, warning: dialog?.kind === "warning" ? null : warning,
 		connect: openConnect,
@@ -249,7 +268,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 			const account = statusRef.current.accounts.find((a) => a.id === id);
 			if (!operation.current && account) { setError(null); showDialog({ kind: "manage", accountId: id, account }); }
 		},
-		select: (id: string) => { if (bridge) void control("change", () => bridge.select(id)); },
+		select: (id: string) => { void control("change", () => bridge.select(id)); },
 		dismissWarning: () => { setDismissedError(REVOCATION_WARNING); setError(null); },
 	};
 	return <Context.Provider value={context}>
@@ -266,7 +285,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 				{context.error && <p role="alert" className="mt-3 text-xs text-red-400">{context.error}</p>}
 				<div className="mt-4 flex items-center justify-end gap-2">
 					<Button variant="ghost" size="sm" disabled={busy} onClick={close}>Cancel</Button>
-					<Button variant="destructive" size="sm" data-testid="chatgpt-confirm-disconnect" disabled={busy || !managedPresent} onClick={() => bridge && managed && void control("disconnect", () => bridge.disconnect(managed.id), managed.id)}>Disconnect account</Button>
+					<Button variant="destructive" size="sm" data-testid="chatgpt-confirm-disconnect" disabled={busy || !managedPresent} onClick={() => managed && void control("disconnect", () => bridge.disconnect(managed.id), managed.id)}>Disconnect account</Button>
 				</div>
 			</div> : <>
 				{dialog.kind === "connect" ? <>
@@ -282,7 +301,7 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 				<div className={`mt-4 flex items-center gap-3 text-xs text-foreground ${busy && operation.current === "change" && status.available && !status.pending ? "[&>button:disabled]:cursor-auto" : ""}`} data-testid="chatgpt-global-background">
 					<Toggle label={BACKGROUND_LABEL} checked={dialog.kind === "connect" ? background : status.allowBackgroundUse} disabled={busy || status.pending || !status.available} onChange={(enabled) => {
 						if (dialog.kind === "connect") { setBackground(enabled); setBackgroundDirty(true); }
-						else if (bridge) void control("change", () => bridge.consent(enabled));
+						else void control("change", () => bridge.consent(enabled));
 					}} />
 					<span>{BACKGROUND_LABEL}<span className="mt-1 block leading-relaxed text-muted-foreground">{CHATGPT_BACKGROUND_HINT}</span></span>
 				</div>
@@ -290,8 +309,8 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 					<a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer" className="underline underline-offset-2">OpenAI privacy</a>
 					<a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer" className="underline underline-offset-2">Manage usage</a>
 				</div>
-				{!status.available && <p className="mt-3 text-xs text-muted-foreground">ChatGPT sign-in is available only in the desktop app. API-key connections remain available here.</p>}
-				{status.pending && <p role="status" className="mt-3 text-xs text-muted-foreground">Waiting for browser sign-in…</p>}
+				{!status.available && <p className="mt-3 text-xs text-muted-foreground">ChatGPT sign-in is unavailable right now. API-key connections remain available here.</p>}
+				{status.pending && (dialog.kind === "connect" && status.signInUrl ? <PasteBack signInUrl={status.signInUrl} busy={busy && operation.current !== "login"} onSubmit={(url) => void finishSignIn(url)} /> : <p role="status" className="mt-3 text-xs text-muted-foreground">Waiting for browser sign-in…</p>)}
 				{context.error && <p role="alert" className="mt-3 text-xs text-red-400">{context.error}</p>}
 				{dialog.kind === "manage" && managed && <div className="mt-4 flex flex-wrap items-center justify-between gap-3" data-testid="chatgpt-account-strip">
 					<div data-testid="chatgpt-managed-identity" className="flex min-w-0 items-center gap-2 text-xs text-foreground">
@@ -313,6 +332,19 @@ export function ChatGPTUIProvider({ children }: { children: React.ReactNode }) {
 	</Context.Provider>;
 }
 
+/** The paste-back step: open OpenAI's sign-in, then paste the address of the
+ * page it redirects to. That page never loads (it points at the viewing
+ * device's own 127.0.0.1); its address carries the one-time code. */
+function PasteBack({ signInUrl, busy, onSubmit }: { signInUrl: string; busy: boolean; onSubmit: (callbackUrl: string) => void }) {
+	const input = useRef<HTMLInputElement>(null);
+	return <form className="mt-3 space-y-2 text-xs text-muted-foreground" data-testid="chatgpt-paste-back" onSubmit={(event) => { event.preventDefault(); const value = input.current?.value.trim(); if (value) onSubmit(value); }}>
+		<p>1. <a href={signInUrl} target="_blank" rel="noreferrer" className="text-foreground underline underline-offset-2" data-testid="chatgpt-sign-in-link">Open ChatGPT sign-in</a> and approve LearnHarness.</p>
+		<p>2. ChatGPT then sends you to a page that does not load (its address starts with http://127.0.0.1). Copy that full address from the address bar and paste it here.</p>
+		<input ref={input} aria-label="Sign-in callback address" type="url" inputMode="url" autoComplete="off" spellCheck={false} required placeholder="http://127.0.0.1:…/auth/callback?code=…" className="w-full rounded-sm border border-border bg-background px-2 py-1.5 font-mono text-foreground" data-testid="chatgpt-callback-input" />
+		<Button type="submit" variant="outline" size="sm" disabled={busy} data-testid="chatgpt-finish-sign-in">Finish sign-in</Button>
+	</form>;
+}
+
 function ContinueButton({ onClick, disabled, testid = "chatgpt-login" }: { onClick: () => void; disabled: boolean; testid?: string }) {
 	return <Button type="button" variant="outline" size="sm" data-testid={testid} onClick={onClick} disabled={disabled} className="cursor-pointer disabled:cursor-not-allowed">
 		{/* Official unmodified mark; existing secondary button hover/focus treatment. */}
@@ -332,11 +364,14 @@ export function ChatGPTConnection(_props: { setup?: boolean } = {}) {
 	const active = ui.status.accounts.find((a) => a.id === ui.status.activeId && a.connected);
 	const accounts = ui.status.accounts.filter((a) => a.connected);
 	return <div className="flex flex-col gap-2" data-testid="chatgpt-connection">
-		<ConnectionRow label="ChatGPT" actionTestid={active ? undefined : "chatgpt-login"} action={active ? "Manage…" : "Connect"} disabled={!ui.status.available || ui.busy || ui.status.pending} onAction={() => active ? ui.manage(active.id) : ui.connect()}>
+		{/* A pending paste-back sign-in survives reloads server-side: the row
+		    reopens it at the paste step instead of sitting disabled. */}
+		<ConnectionRow label="ChatGPT" actionTestid={active ? undefined : "chatgpt-login"} action={ui.status.pending ? "Finish sign-in" : active ? "Manage…" : "Connect"} disabled={!ui.status.available || ui.busy} onAction={() => ui.status.pending ? ui.connect() : active ? ui.manage(active.id) : ui.connect()}>
 			{active && <select aria-label="ChatGPT account" value={active.id} disabled={ui.busy || ui.status.pending} onChange={(event) => ui.select(event.target.value)} className="min-w-0 rounded-sm border border-border bg-background px-2 py-1 text-xs text-foreground">
 				{accounts.map((a) => <option key={a.id} value={a.id}>{a.email || "ChatGPT account"}</option>)}
 			</select>}
 		</ConnectionRow>
+		{active && <div className="flex items-center gap-2 text-xs text-muted-foreground"><span>Plan usage</span><ChatGPTUsageMeter /></div>}
 		{ui.inlineError && <p role="alert" className="text-xs text-red-400">{ui.inlineError}</p>}
 		{ui.warning && <div role="alert" data-testid="chatgpt-revocation-warning" className="rounded-sm border border-border px-3 py-2 text-xs text-muted-foreground">{ui.warning}<button type="button" className="ml-2 cursor-pointer underline underline-offset-2" onClick={ui.dismissWarning}>Dismiss</button></div>}
 	</div>;

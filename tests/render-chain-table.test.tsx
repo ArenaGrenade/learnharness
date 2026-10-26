@@ -125,9 +125,8 @@ describe("ChainTableBody — clusters (the outermost layer)", () => {
 });
 
 describe("ChainTableBody — THE shared TopBar + the lines law (owner, round 2)", () => {
-	it("the body renders the standardized top bar: h-15, lh-drag, select-none, NO title (serif = session name, always), close X", () => {
+	it("the body renders the standardized top bar: h-15, select-none, NO title (serif = session name, always), close X", () => {
 		const html = render();
-		assert.ok(html.includes("lh-drag"), "the window-drag band");
 		assert.ok(html.includes("select-none"), "dragging never highlights the bar");
 		assert.ok(html.includes("h-15"), "the standard height");
 		assert.ok(!html.includes(">Chains<"), "NO title (owner round 11): the serif register always names a session");

@@ -207,3 +207,21 @@ describe("resolveKeyStatuses (pure projection)", () => {
 		assert.ok(!row.shadowedByEnv, "same value both places: redundant, not shadowed");
 	});
 });
+
+describe("connector values (owner, 2026-10-26)", () => {
+	it("connector rows carry their full value; every other row stays masked-only", () => {
+		const rows = resolveKeyStatuses(
+			{ SEARXNG_URL: " http://127.0.0.1:9180 ", ALPHAXIV_API_KEY: "ax-key-0123456789abcdef", OPENROUTER_API_KEY: "sk-or-v1-secret-0123456789", DEEPGRAM_API_KEY: "dg-secret-0123456789abcdef" },
+			{},
+			new Set(),
+			new Set(["OPENROUTER_API_KEY"]),
+		);
+		const by = (id: string) => rows.find((r) => r.id === id)!;
+		assert.equal(by("SEARXNG_URL").value, "http://127.0.0.1:9180");
+		assert.equal(by("ALPHAXIV_API_KEY").value, "ax-key-0123456789abcdef");
+		assert.equal(by("TAVILY_API_KEY").value, undefined, "absent connector: nothing to show");
+		assert.equal(by("OPENROUTER_API_KEY").value, undefined);
+		assert.equal(by("DEEPGRAM_API_KEY").value, undefined);
+		assert.doesNotMatch(JSON.stringify([by("OPENROUTER_API_KEY"), by("DEEPGRAM_API_KEY")]), /secret/);
+	});
+});

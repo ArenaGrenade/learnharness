@@ -15,7 +15,8 @@
  *    a paste box on a key the UI cannot make live would mislead.
  *  - OpenRouter is NOT special: one provider among 33, a row only when
  *    stored, otherwise it lives in the Add dropdown like everyone else.
- *  - Providers groups API keys, subscriptions, dictation and search.
+ *  - Providers groups API keys, subscriptions, dictation and connectors
+ *    (research sources: SearXNG, Tavily, Brave, alphaXiv — shown in full).
  *    Unknown variables stay masked/read-only at the end of Model API keys.
  *
  * API: GET /api/keys (masked statuses + the providers array), PUT
@@ -24,7 +25,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { AUTH_KEYS, type AuthKeyStatus } from "@/src/core";
+import { AUTH_KEYS, isUrlKey, type AuthKeyStatus } from "@/src/core";
 import { SettingsGroup } from "./controls.tsx";
 import { SubscriptionConnections } from "./subscription-connections.tsx";
 import { ProviderMenuList } from "./model-menu.tsx";
@@ -100,6 +101,8 @@ export function classifyKeys(
  *  environment-owned value — the row itself is read-only then). Pure. */
 export function keyStatusLine(status: AuthKeyStatus): string {
 	if (!status.present || !status.masked) return "not set";
+	// Connector rows carry their full value (owner, 2026-10-26).
+	if (status.value !== undefined) return `${status.value}${status.source === "env" ? " · env" : ""}`;
 	const tail = status.masked.replace(/ \((\d+) chars\)$/, "");
 	const chars = status.masked.match(/\((\d+) chars\)$/)?.[1] ?? "?";
 	return `${tail} · ${chars}${status.source === "env" ? " · env" : ""}`;
@@ -133,7 +136,9 @@ function KeyTableRow({
 	testid: string;
 }) {
 	const envOwned = status.source === "env";
-	const [value, setValue] = useState("");
+	const isUrl = isUrlKey(status.id);
+	// Connector rows edit in place: the editor opens on the current value.
+	const [value, setValue] = useState(status.value ?? "");
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 
@@ -163,8 +168,8 @@ function KeyTableRow({
 						onKeyDown={(e) => {
 							if (e.key === "Enter") void save();
 						}}
-						placeholder="Paste key…"
-						aria-label={`${label} key`}
+						placeholder={isUrl ? "http://127.0.0.1:9180" : "Paste key…"}
+						aria-label={`${label} ${isUrl ? "URL" : "key"}`}
 						data-testid={`${testid}-input`}
 						disabled={busy}
 						autoFocus
@@ -230,10 +235,10 @@ function KeyTableRow({
 							onClick={(e) => e.stopPropagation()}
 							className="text-[10px] text-muted-foreground/60 underline-offset-2 hover:text-foreground hover:underline"
 						>
-							key ↗
+							{isUrl ? "docs ↗" : "key ↗"}
 						</a>
 					)}
-					<span data-testid={`${testid}-status`} className="font-mono text-[11px] text-muted-foreground">
+					<span data-testid={`${testid}-status`} title={status.value} className="max-w-56 truncate font-mono text-[11px] text-muted-foreground">
 						{keyStatusLine(status)}
 					</span>
 				</span>
@@ -459,7 +464,7 @@ export function KeysSection({
 				<SubscriptionConnections />
 			</SettingsGroup>
 
-			{(["Dictation", "Search"] as const).map((label) => <SettingsGroup key={label} label={label} testid={label === "Dictation" ? "group-dictation" : "group-search"}>
+			{(["Dictation", "Connectors"] as const).map((label) => <SettingsGroup key={label} label={label} testid={label === "Dictation" ? "group-dictation" : "group-connectors"}>
 				{toolRows.filter((status) => label === "Dictation" ? status.id === "DEEPGRAM_API_KEY" : status.id !== "DEEPGRAM_API_KEY").map((status) => (
 					<KeyTableRow
 						key={status.id}

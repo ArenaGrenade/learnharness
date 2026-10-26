@@ -49,7 +49,7 @@ export * from "./view.ts";
 export * from "./tool-parts.ts";
 export * from "./prices.ts";
 export * from "./context-usage.ts";
-export type { ChatGPTStatus, ChatGPTControlBridge } from "./contracts/chatgpt.ts";
+export type { ChatGPTStatus, ChatGPTControlBridge, ChatGPTPlanUsage, ChatGPTUsageWindow } from "./contracts/chatgpt.ts";
 export { NATIVE_SUBSCRIPTIONS } from "./contracts/subscriptions.ts";
 export type { NativeSubscriptionProviderId, NativeSubscriptionLogicalId, NativeSubscriptionStatus, NativeSubscriptionSnapshot, NativeSubscriptionScope, NativeSubscriptionControlBridge, SubscriptionInteraction, SubscriptionPrompt } from "./contracts/subscriptions.ts";
 export * from "./cost-summary.ts";
@@ -66,6 +66,7 @@ export * from "./settings.ts";
 export type { ChatDeleteMode, ChatDeletionStats } from "./graph-deletion.ts";
 export * from "./settings-resolution.ts";
 export * from "./search.ts"; // search port (search wave, 2026-09-20)
+export * from "./topic.ts"; // topics wave (2026-10-26): pure status + What next
 export * from "./session-find.ts";
 export * from "./session-navigation.ts";
 // auth-keys.ts (auth-keys wave, 2026-09-19): the curated key catalog +

@@ -14,6 +14,8 @@ import type {
 	ChatRecord,
 	ChatSettings,
 	ChatSummary,
+	ChatTopicLink,
+	ChatTopicTarget,
 	GraphChain,
 	GraphNode,
 	JobKind,
@@ -25,6 +27,9 @@ import type {
 	SessionCheckpoint,
 	TurnUsage,
 	NotesSource,
+	TopicComponent,
+	TopicEvidence,
+	TopicRecord,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -32,9 +37,10 @@ import type { UserSettings } from "./settings.ts";
 
 export interface ChatStore {
 	/** Create a session record (persisted immediately). */
-	/** Create a session record; kind "practice" marks a practice session
+	/** Create a session record; kind "practice" marks a practice session,
+	 *  kind "topic" a topic's mapping/check-up conversation (with its link)
 	 *  (absent = teach, the default). */
-	createChat(title: string, kind?: "practice"): ChatRecord;
+	createChat(title: string, kind?: "practice" | "topic", topic?: ChatTopicLink, topicTarget?: ChatTopicTarget): ChatRecord;
 	/** The full record, or null if unknown id / corrupt file. */
 	getChat(id: string): ChatRecord | null;
 	/** All sessions, newest activity first (the sidebar's list view). */
@@ -158,6 +164,30 @@ export interface JobStore {
 	deleteJobsForChat(chatId: string): number;
 }
 
+// ─── TopicStore — topics and their evidence (topics wave, 2026-10-26) ───────
+
+/** One file per topic (data/topics/<id>.json). The store is the ONLY
+ *  writer; evidence is append-only, components only grow (edits arrive as
+ *  whole-list replacements from the pure applyMapComponents). Every write
+ *  announces topics-changed. */
+export interface TopicStore {
+	/** Create a topic. The caller mints the id (newTopicId) so the mapping
+	 *  chat — created first — can already point at it. */
+	createTopic(init: { id: string; title: string; mapChatId: string }): TopicRecord;
+	getTopic(id: string): TopicRecord | null;
+	/** All topics, most recently updated first. */
+	listTopics(): TopicRecord[];
+	/** Replace the component list (already validated as a DAG); optionally
+	 *  set the concrete goal. */
+	saveComponents(id: string, components: TopicComponent[], goal?: string): TopicRecord | null;
+	/** Append one piece of evidence. */
+	appendEvidence(id: string, evidence: TopicEvidence): TopicRecord | null;
+	/** Mark the map concluded (map_done). */
+	markMapped(id: string, at: string): TopicRecord | null;
+	/** Delete a topic (its chats are deleted by the caller). */
+	deleteTopic(id: string): boolean;
+}
+
 // ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──
 
 /**
@@ -203,8 +233,7 @@ export interface PromptOverrideStore {
 // ─── AuthStore — BYOK provider keys (auth-keys wave, 2026-09-19) ────────────
 
 /**
- * The long-standing flat {VAR: value} auth.json map (config.AUTH_FILE) —
- * the same file the Electron app has always hand-edited, now first-class
+ * The long-standing flat {VAR: value} auth.json map (config.AUTH_FILE),
  * server-managed. Values are opaque strings: shape validation is a
  * server-band concern (core/auth-keys.ts validateKeyShape — the store
  * persists what it is given); env precedence is a server-band concern

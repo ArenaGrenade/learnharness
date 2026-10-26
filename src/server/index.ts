@@ -44,3 +44,10 @@ export { runPiTurn, piTurnResponse, type PiTurnHandle, type PiTurnSpec } from ".
 export * from "./observability.ts";
 export * from "./model-catalog.ts";
 export { sessionCost } from "./pricing.ts";
+// The connection host (web host, 2026-10-25): subscription credentials live
+// in this process; routes reach the controls through the barrel.
+export { connectionHost, chatGPTControl, chatGPTUsage, subscriptionControl } from "./connections/host.ts";
+// The single-user lock (web host, 2026-10-25): the login route and page.
+export { readAccess, verifyPassphrase, issueSession, loginThrottle, SESSION_COOKIE, SESSION_MAX_AGE_S } from "./access.ts";
+// Topics (topics wave, 2026-10-26).
+export { createTopic, deleteTopic, getTopic, listTopics, startCheckup, startLearning, TopicRequestError } from "./topics.ts";
