@@ -21,6 +21,7 @@ import { acceptSubscriptionChange, connectSubscriptionHost } from "../../agent/s
 import { createChatGPT, fileStore as chatGPTFileStore, publicError as chatGPTError, type ChatGPTService } from "./chatgpt.ts";
 import { createSubscriptions, publicError as subscriptionError, type SubscriptionService } from "./subscriptions.ts";
 import { PROVIDERS } from "./subscription-store.ts";
+import { limitPushPayload, sendPush } from "../push.ts";
 
 interface Host { chatgpt: ChatGPTService; subscriptions: SubscriptionService }
 const KEY = Symbol.for("lh.connections.host");
@@ -42,6 +43,7 @@ function boot(): Host {
 				if (op === "status") return { status: await chatgpt.status(), ...chatgpt.stamp() };
 				if (op === "models") return await chatgpt.models();
 				if (op === "lease" && typeof fields.background === "boolean") return await chatgpt.lease(fields.background, fields);
+				if (op === "limit") { void holdForLimit(chatgpt); return { ok: true }; }
 				throw new Error("Invalid private operation");
 			} catch (err) { throw new Error(chatGPTError(err)); }
 		},
@@ -128,4 +130,29 @@ export async function chatGPTUsage(service: ChatGPTService = connectionHost().ch
 	const value = service.planUsage();
 	g[USAGE_CACHE] = { key, at: now, value };
 	return value;
+}
+
+/** When the exhausted window resets, from a FRESH usage read (bypassing the
+ *  cache): the latest reset among windows at/near 100%. undefined when
+ *  usage is unreadable or nothing is exhausted. */
+async function exhaustedUntil(service: ChatGPTService): Promise<number | undefined> {
+	(globalThis as typeof globalThis & { [USAGE_CACHE]?: unknown })[USAGE_CACHE] = undefined;
+	const usage = await chatGPTUsage(service);
+	if (!usage.available) return undefined;
+	const resets = usage.windows.filter((w) => w.usedPercent >= 99 && w.resetsAt).map((w) => Date.parse(w.resetsAt!));
+	return resets.length ? Math.max(...resets) : undefined;
+}
+
+/** Without a readable reset time, hold for this long, then let the next
+ *  request find out (a fresh limit error re-arms the hold). */
+const LIMIT_RECHECK_MS = 30 * 60_000;
+
+/** A request hit the plan limit: hold background ChatGPT work until the
+ *  window resets, then resume on its own (owner decision, 2026-10-26). */
+export async function holdForLimit(service: ChatGPTService = connectionHost().chatgpt): Promise<void> {
+	const wasLimited = !!(await service.status()).limitedUntil;
+	const until = (await exhaustedUntil(service).catch(() => undefined)) ?? Date.now() + LIMIT_RECHECK_MS;
+	service.markLimited(until, () => exhaustedUntil(service), () => void sendPush(limitPushPayload("lifted")).catch(() => {}));
+	// Limit alerts (owner decision): once when the hold starts, once when it lifts.
+	if (!wasLimited) void sendPush(limitPushPayload("limited", until)).catch(() => {});
 }

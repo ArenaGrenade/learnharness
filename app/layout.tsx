@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { JetBrains_Mono, Source_Sans_3 } from "next/font/google";
 import "katex/dist/katex.min.css";
 import "./globals.css";
@@ -11,7 +11,14 @@ const prose = Source_Sans_3({ subsets: ["latin"], variable: "--font-sans3" });
 export const metadata: Metadata = {
 	title: "Learning Harness",
 	description: "A teacher agent with a memory — sessions, quizzes, and a knowledge graph of what you know.",
+	// The installable app (web host, 2026-10-26): iOS needs the
+	// apple-web-app flags and touch icon to run it standalone (and push).
+	applicationName: "LearnHarness",
+	appleWebApp: { capable: true, title: "LearnHarness", statusBarStyle: "black-translucent" },
+	icons: { icon: "/favicon-32.png", apple: "/apple-touch-icon.png" },
 };
+
+export const viewport: Viewport = { themeColor: "#141414", viewportFit: "cover" };
 
 /** The document shell only. The app chrome (event channel, sidebar, docks)
  * lives in app/(app)/layout.tsx so /login renders without it. */

@@ -44,6 +44,10 @@ export interface PracticeToolContext {
 	 *  Each absent context (tests) = absent from the registry. */
 	graph?: GraphToolContext;
 	jobs?: JobToolContext;
+	/** A problem concluded (topics wave, 2026-10-26): its target graph nodes
+	 *  and outcome, so the topic maps can record practice evidence. Absent
+	 *  (tests) = no reporting. */
+	onConclude?: (targets: string[], outcome: string) => void;
 }
 
 /** TURN-SCOPED GATE STATE (the BKT incident, 2026-10-05): the gates used
@@ -196,7 +200,7 @@ export const concludeInputObject = Type.Object({
 
 export type ConcludeInput = Static<typeof concludeInputObject>;
 
-export function concludeTool(gate: PracticeGate): AgentTool<typeof concludeInputObject> {
+export function concludeTool(gate: PracticeGate, ctx?: PracticeToolContext): AgentTool<typeof concludeInputObject> {
 	return {
 		name: "conclude",
 		label: "conclude",
@@ -214,6 +218,15 @@ export function concludeTool(gate: PracticeGate): AgentTool<typeof concludeInput
 				return invalidInputResult("conclude", ["no active problem to conclude — pose one first"]);
 			}
 			gate.problemActive = false;
+			// Report the outcome on the problem's targets (the record holds the
+			// pose: a problem always ends the turn it is posed in).
+			if (ctx?.onConclude) {
+				const record = ctx.chatStore.getChat(ctx.chatId);
+				const active = record ? activeProblemOf(record.messages) : null;
+				const targets = (active?.input as { target?: unknown } | undefined)?.target;
+				try { ctx.onConclude(Array.isArray(targets) ? targets.filter((t): t is string => typeof t === "string") : [], (_input as { outcome: string }).outcome); }
+				catch { /* evidence is best-effort; the conclude stands */ }
+			}
 			return concludeResult();
 		},
 	};
@@ -237,7 +250,7 @@ export function practiceTools(ctx: PracticeToolContext): Record<string, AgentToo
 	// inner pass; the double heal is idempotent by construction.
 	return healToolRecord({
 		problem: problemTool(gate, ctx.graphNodes),
-		conclude: concludeTool(gate),
+		conclude: concludeTool(gate, ctx),
 		read: readTool,
 		ls: lsTool,
 		find: findTool,

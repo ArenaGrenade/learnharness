@@ -26,8 +26,9 @@ export const TOPIC_VERDICTS: readonly TopicVerdict[] = ["held", "shaky", "miscon
 /** Where a piece of evidence came from. map = the topic probe; checkup = a
  *  short check-up conversation; session-probe = a targeted teaching
  *  session's probe_done; lesson-complete = a targeted session's teacher
- *  concluded the lesson (taught, pending confirmation). */
-export type TopicEvidenceKind = "map" | "checkup" | "session-probe" | "lesson-complete";
+ *  concluded the lesson (taught, pending confirmation); practice = a
+ *  practice problem targeting the component's propositions concluded. */
+export type TopicEvidenceKind = "map" | "checkup" | "session-probe" | "lesson-complete" | "practice";
 
 /** The derived status the map renders. */
 export type ComponentStatus = "unprobed" | "held" | "due" | "taught" | "shaky" | "misconception" | "missing";
@@ -44,7 +45,40 @@ export interface TopicComponent {
 	/** A starting fact with nothing underneath worth probing: a missing
 	 *  foundation is taught as-is, not descended into. */
 	foundation?: boolean;
+	/** Papers this concept comes from (topics from a paper — the traced
+	 *  outline's sources). Teaching sessions for it receive them. */
+	sources?: PaperRef[];
 	createdAt: string;
+}
+
+/** A paper as the tracer and mapper cite it. */
+export interface PaperRef {
+	title: string;
+	url: string;
+}
+
+/** The citation tracer's deliverable: the paper's core methods and ideas
+ *  as a concept DAG, each with the papers it comes from. */
+export interface PaperOutline {
+	title: string;
+	summary: string;
+	concepts: Array<{ key: string; name: string; description: string; prerequisites: string[]; sources: PaperRef[] }>;
+	/** Every paper read, with its citation depth (0 = the paper itself). */
+	papers: Array<PaperRef & { depth: number }>;
+}
+
+/** A topic started from a paper (learn-from-a-paper, 2026-10-26). */
+export interface TopicPaperSource {
+	kind: "paper";
+	arxivId: string;
+	url: string;
+	status: "tracing" | "ready" | "error";
+	/** The latest progress line while tracing. */
+	progress?: string;
+	error?: string;
+	outline?: PaperOutline;
+	startedAt: string;
+	finishedAt?: string;
 }
 
 export interface TopicEvidence {
@@ -73,6 +107,8 @@ export interface TopicRecord {
 	evidence: TopicEvidence[];
 	/** Set when the mapper concluded with every branch at held ground. */
 	mappedAt?: string;
+	/** A topic started from a paper: the citation trace and its outline. */
+	source?: TopicPaperSource;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -110,6 +146,7 @@ export const mapComponentsInput = Type.Object({
 			description: Type.String({ minLength: 1, description: "One sentence: what holding this concept means." }),
 			prerequisites: Type.Optional(Type.Array(Type.String(), { description: "Keys from this call or existing component ids this concept rests on." })),
 			foundation: Type.Optional(Type.Boolean({ description: "true for a starting fact with nothing underneath worth probing." })),
+			sources: Type.Optional(Type.Array(Type.Object({ title: Type.String(), url: Type.String() }), { description: "Papers the concept comes from (from the paper outline, when there is one)." })),
 		}),
 		{ description: "New components to add to the map." },
 	),
@@ -128,3 +165,11 @@ export const mapVerdictInput = Type.Object({
 	verdict: Type.Union(TOPIC_VERDICTS.map((v) => Type.Literal(v)), { description: "held | shaky | misconception | missing — from the evidence of your questions." }),
 	note: Type.String({ minLength: 1, description: "Floor (what he reliably gets right), ceiling (where it runs out), misconceptions found. Short." }),
 });
+
+/** What a component links to in the rest of the app — DERIVED on read,
+ *  never stored: the teaching sessions targeted at it and the graph
+ *  propositions born in those sessions. */
+export interface ComponentLinks {
+	sessions: Array<{ chatId: string; title: string; purpose: "learn" | "repair" }>;
+	propositions: Array<{ id: string; name: string; statement: string }>;
+}

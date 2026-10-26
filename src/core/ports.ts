@@ -29,6 +29,7 @@ import type {
 	NotesSource,
 	TopicComponent,
 	TopicEvidence,
+	TopicPaperSource,
 	TopicRecord,
 } from "./contracts.ts";
 import type { UserSettings } from "./settings.ts";
@@ -173,7 +174,7 @@ export interface JobStore {
 export interface TopicStore {
 	/** Create a topic. The caller mints the id (newTopicId) so the mapping
 	 *  chat — created first — can already point at it. */
-	createTopic(init: { id: string; title: string; mapChatId: string }): TopicRecord;
+	createTopic(init: { id: string; title: string; mapChatId: string; source?: TopicPaperSource }): TopicRecord;
 	getTopic(id: string): TopicRecord | null;
 	/** All topics, most recently updated first. */
 	listTopics(): TopicRecord[];
@@ -184,6 +185,9 @@ export interface TopicStore {
 	appendEvidence(id: string, evidence: TopicEvidence): TopicRecord | null;
 	/** Mark the map concluded (map_done). */
 	markMapped(id: string, at: string): TopicRecord | null;
+	/** Merge into the paper source (tracer progress/result); optionally
+	 *  retitle the topic (the traced paper's title). */
+	updateSource(id: string, patch: Partial<TopicPaperSource>, title?: string): TopicRecord | null;
 	/** Delete a topic (its chats are deleted by the caller). */
 	deleteTopic(id: string): boolean;
 }

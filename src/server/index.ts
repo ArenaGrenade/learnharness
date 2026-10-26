@@ -50,4 +50,6 @@ export { connectionHost, chatGPTControl, chatGPTUsage, subscriptionControl } fro
 // The single-user lock (web host, 2026-10-25): the login route and page.
 export { readAccess, verifyPassphrase, issueSession, loginThrottle, SESSION_COOKIE, SESSION_MAX_AGE_S } from "./access.ts";
 // Topics (topics wave, 2026-10-26).
-export { createTopic, deleteTopic, getTopic, listTopics, startCheckup, startLearning, TopicRequestError } from "./topics.ts";
+export { createTopic, deleteTopic, getTopic, listTopics, startCheckup, startLearning, topicLinks, tracePaper, TopicRequestError } from "./topics.ts";
+// Push notifications (web host, 2026-10-26).
+export { pushPublicKey, pushSettings, subscribePush, unsubscribePush, setDigestTime, sendPush, PushRequestError } from "./push.ts";

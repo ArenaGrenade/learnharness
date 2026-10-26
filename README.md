@@ -30,6 +30,8 @@ Instead of just giving you an explanation, it uses your answers and thinking to 
 
 **Topics.** For a bigger target ("transformers", "real analysis"), start a topic instead of a session. A mapping conversation makes the goal concrete, lays out every concept it rests on, and probes each one, descending under every gap until it reaches ground you hold, so no subtree is skipped. The topic page shows the map colored by your standing and a **What next** list: misconceptions to repair, check-ups that are due, frontier concepts ready to learn. Each item starts a targeted session or a short check-up, and its results update the map. Held concepts come back for check-ups at widening intervals.
 
+**Learn from a paper.** Name an arXiv paper as a topic and a tracer follows its citations back to where its core methods and ideas come from. Those ideas become the map, each linked to its source papers.
+
 **Think out loud.** The thinking fields let you explain your reasoning, uncertainties, and reactions in your own words. This is how the agent gets a detailed picture rather than just a record of right and wrong answers. You can type or use dictation.
 
 The agent can also research questions in the background, create visual explanations, and build interactive demonstrations.
@@ -44,7 +46,7 @@ Future teaching sessions can read the graph instead of starting from scratch. Pr
 
 ## Get started
 
-LearnHarness is a self-hosted web app for one person. It runs on a machine you own, and you open it from any device through a Cloudflare Tunnel or Tailscale, behind a passphrase. See the **[self-hosting guide](docs/self-hosting.md)**.
+LearnHarness is a self-hosted web app for one person. It runs on a machine you own, and you open it from any device through a Cloudflare Tunnel or Tailscale, behind a passphrase. It installs on your phone's home screen, with a daily What-next notification. See the **[self-hosting guide](docs/self-hosting.md)**.
 
 ```bash
 npm ci && npm run build

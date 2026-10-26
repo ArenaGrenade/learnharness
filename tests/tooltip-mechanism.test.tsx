@@ -17,7 +17,6 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Hint, hintText } from "../components/ui/hint.tsx";
 import { TOOLTIP_DELAY_MS } from "../components/ui/tooltip.tsx";
-import { AUTO_UPDATE_HINT } from "../components/settings/settings-dialog.tsx";
 import { IS_MAC } from "../src/core/keyboard.ts";
 
 describe("hintText — the parenthesized composition", () => {
@@ -44,12 +43,7 @@ describe("subtlety round pins (owner 2026-09-25)", () => {
 	});
 });
 
-describe("spot-pins: the dev-speak cull (owner copy review at merge)", () => {
-	it("the auto-update hint is honest user language — no stream jargon", () => {
-		assert.equal(AUTO_UPDATE_HINT, "Automatic updates arrive in an upcoming release");
-		assert.ok(!AUTO_UPDATE_HINT.includes("wave"), "no stream vocabulary");
-	});
-});
+
 
 describe("Hint — the mechanism (SSR: the tooltip itself stays closed)", () => {
 	it("asChild: no wrapper DOM — the control keeps its own testid and classes", () => {

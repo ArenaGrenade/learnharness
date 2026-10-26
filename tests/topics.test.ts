@@ -114,6 +114,7 @@ function memoryStore(record: TopicRecord): TopicStore & { record: TopicRecord } 
 		appendEvidence: (_id: string, e: TopicEvidence) => { store.record = { ...store.record, evidence: [...store.record.evidence, e] }; return store.record; },
 		markMapped: (_id: string, at: string) => { store.record = { ...store.record, mappedAt: at }; return store.record; },
 		deleteTopic: () => false,
+		updateSource: () => store.record,
 	};
 	return store;
 }

@@ -26,6 +26,8 @@ export function proxy(request: NextRequest) {
 
 export const config = {
 	// Everything except build assets and the bundled fonts the login page
-	// itself needs; public/ media (worklets, logos) stays behind the gate.
-	matcher: ["/((?!_next/static|_next/image|favicon\\.ico|fonts/).*)"],
+	// itself needs; other public/ media (worklets, logos) stays behind the gate.
+	// The install files are public by necessity: browsers fetch the
+	// manifest, icons and service worker without credentials.
+	matcher: ["/((?!_next/static|_next/image|favicon\\.ico|fonts/|manifest\\.webmanifest$|sw\\.js$|icon-192\\.png$|icon-512\\.png$|apple-touch-icon\\.png$|favicon-32\\.png$).*)"],
 };

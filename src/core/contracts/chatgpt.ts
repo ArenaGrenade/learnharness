@@ -16,6 +16,9 @@ export interface ChatGPTStatus {
 	}[];
 	error: string | null;
 	catalogError?: string | null;
+	/** ISO — the plan's usage limit was hit; background ChatGPT work is held
+	 *  until then (absent = not limited). Foreground requests still go. */
+	limitedUntil?: string;
 }
 export interface ChatGPTControlBridge {
 	status(): Promise<ChatGPTStatus>;

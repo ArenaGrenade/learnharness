@@ -6,7 +6,7 @@
  * its source text, override text (if a file exists), and effective switch
  * state (settings record's agent.prompts map AND file presence).
  *
- *   GET → 200 {prober: SegmentInfo[], teacher: SegmentInfo[]}
+ *   GET → 200 {prober: SegmentInfo[], teacher: SegmentInfo[], mapper: SegmentInfo[]}
  *   SegmentInfo = {path, sourceText, overrideText, enabled, shared}
  *
  * The shared base appears in BOTH lists under the SAME path
@@ -25,5 +25,7 @@ export async function GET() {
 	return Response.json({
 		prober: effectivePromptSegments("prober", switches),
 		teacher: effectivePromptSegments("teacher", switches),
+		// The topic mapper (topics wave, 2026-10-26).
+		mapper: effectivePromptSegments("mapper", switches),
 	});
 }

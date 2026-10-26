@@ -24,6 +24,7 @@ import { kbdEventForAction } from "@/src/core";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { announceConnectionsChanged } from "@/components/connection-bridges";
 import { TopicsSection } from "@/components/topics-section";
+import { ChatGPTLimitBanner } from "@/components/chatgpt-limit-banner";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
@@ -920,6 +921,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 			    after the content in the tree, but it's window-level so order only
 			    matters for the events it dispatches, never for DOM priority. */}
 			<KeyboardShortcuts />
+			<ChatGPTLimitBanner />
 		</SettingsDialogProvider>
 	);
 }

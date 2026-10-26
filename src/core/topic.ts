@@ -4,11 +4,11 @@
  * store" doctrine at the component grain). Browser-safe: the topic page
  * computes the same statuses and What next the server does.
  */
-import { CHECKUP_INTERVALS_DAYS, type ComponentStatus, type TopicComponent, type TopicEvidence, type TopicRecord, type TopicVerdict } from "./contracts/topic.ts";
+import { CHECKUP_INTERVALS_DAYS, type ComponentStatus, type PaperOutline, type TopicComponent, type TopicEvidence, type TopicRecord, type TopicVerdict } from "./contracts/topic.ts";
 import { newMessageId, type LhMarkerMessage } from "./native-messages.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MEASURED: ReadonlySet<TopicEvidence["kind"]> = new Set(["map", "checkup", "session-probe"]);
+const MEASURED: ReadonlySet<TopicEvidence["kind"]> = new Set(["map", "checkup", "session-probe", "practice"]);
 
 export interface ComponentState {
 	status: ComponentStatus;
@@ -58,7 +58,7 @@ export function groundHeld(status: ComponentStatus): boolean {
 // ─── map edits ──────────────────────────────────────────────────────────────
 
 export interface MapComponentsInput {
-	components: Array<{ key: string; name: string; description: string; prerequisites?: string[]; foundation?: boolean }>;
+	components: Array<{ key: string; name: string; description: string; prerequisites?: string[]; foundation?: boolean; sources?: Array<{ title: string; url: string }> }>;
 	links?: Array<{ component: string; prerequisite: string }>;
 	goal?: string;
 }
@@ -86,7 +86,8 @@ export function applyMapComponents(
 			if (!id) errors.push(`component "${c.key}": unknown prerequisite "${ref}"`);
 			else if (!prerequisites.includes(id)) prerequisites.push(id);
 		}
-		next.push({ id: ids[c.key]!, name: c.name.trim(), description: c.description.trim(), prerequisites, ...(c.foundation ? { foundation: true } : {}), createdAt: now });
+		const sources = (c.sources ?? []).filter((s) => /^https?:\/\//.test(s.url)).slice(0, 8).map((s) => ({ title: s.title.trim().slice(0, 300), url: s.url }));
+		next.push({ id: ids[c.key]!, name: c.name.trim(), description: c.description.trim(), prerequisites, ...(c.foundation ? { foundation: true } : {}), ...(sources.length ? { sources } : {}), createdAt: now });
 	}
 	for (const link of input.links ?? []) {
 		const target = resolve(link.component), prerequisite = resolve(link.prerequisite);
@@ -226,9 +227,48 @@ export function newTopicTargetMessage(record: TopicRecord, componentId: string, 
 		`Current standing: ${state.status}`,
 		...(evidence.length ? ["Evidence so far:", ...evidence] : []),
 		...(prerequisites.length ? ["What it rests on (and his standing there):", ...prerequisites] : []),
+		...(component.sources?.length ? ["Where this concept comes from (teach from these when it helps; the research tool can read them):", ...component.sources.map((s) => `- ${s.title} <${s.url}>`)] : []),
 		"",
 		"The probe CONFIRMS this picture rather than searching from scratch: re-bracket the target quickly, check the prerequisites only where the evidence is old or thin. probe_done must carry targetVerdict — his standing on the target component before teaching. When the lesson reaches its goal, the teacher calls lesson_complete.",
 	];
 	const details: TopicTargetDetails = { topicId: record.id, topicTitle: record.title, componentId, componentName: component.name, purpose };
 	return { id: newMessageId(), role: "custom", customType: "topic-target", content: lines.join("\n"), display: true, details, timestamp: now };
+}
+
+// ─── learn from a paper ─────────────────────────────────────────────────────
+
+/** An arXiv paper reference from what the learner typed: a bare id
+ *  (2401.12345, 2401.12345v2, hep-th/9901001) or an arxiv.org / alphaxiv.org
+ *  abs/pdf link. null when it is not one. */
+export function parseArxivRef(input: string): { arxivId: string; url: string } | null {
+	const text = input.trim();
+	const id = String.raw`(\d{4}\.\d{4,5}(?:v\d+)?|[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(?:v\d+)?)`;
+	const bare = new RegExp(`^(?:arxiv:)?${id}$`, "i").exec(text);
+	const link = new RegExp(String.raw`^(?:https?:\/\/)?(?:www\.)?(?:arxiv\.org|alphaxiv\.org)\/(?:abs|pdf|overview)\/${id}(?:\.pdf)?\/?(?:[?#].*)?$`, "i").exec(text);
+	const arxivId = (bare ?? link)?.[1];
+	return arxivId ? { arxivId, url: `https://arxiv.org/abs/${arxivId}` } : null;
+}
+
+/** The paper-outline marker's UI payload. */
+export interface PaperOutlineDetails {
+	outline: PaperOutline;
+}
+
+/** Message[0] of a paper topic's mapping conversation: the traced outline
+ *  — the mapper's first draft of components, with their sources. */
+export function newPaperOutlineMessage(outline: PaperOutline, now: number = Date.now()): LhMarkerMessage {
+	const name = (key: string) => outline.concepts.find((c) => c.key === key)?.name ?? key;
+	const lines = [
+		`[Session context] — this topic is a research paper, traced through its citations before mapping:`,
+		"",
+		`Paper: ${outline.title}`,
+		`Summary: ${outline.summary}`,
+		"",
+		"Concept outline (a first draft of the map — confirm with him which parts he wants, then lay out components from it, carrying each concept's sources in map_components):",
+		...outline.concepts.map((c) => `- [${c.key}] ${c.name}: ${c.description}${c.prerequisites.length ? ` — rests on: ${c.prerequisites.map(name).join(", ")}` : ""}${c.sources.length ? ` — sources: ${c.sources.map((s) => `${s.title} <${s.url}>`).join("; ")}` : ""}`),
+		"",
+		`Papers read (${outline.papers.length}): ${outline.papers.map((p) => `${p.title} (depth ${p.depth})`).join("; ")}`,
+	];
+	const details: PaperOutlineDetails = { outline };
+	return { id: newMessageId(), role: "custom", customType: "paper-outline", content: lines.join("\n"), display: true, details, timestamp: now };
 }

@@ -23,7 +23,7 @@ const CALLBACK_PATH = "/auth/callback";
 const REVOCATION_WARNING = "Account disconnected locally. Remote revocation could not be confirmed.";
 const random = () => crypto.randomBytes(32).toString("base64url");
 
-type FailureCode = "cancelled" | "timeout" | "storage" | "identity" | "scope" | "disconnected" | "background" | "catalog" | "expired" | "network" | "pending" | "callback" | "unavailable";
+type FailureCode = "cancelled" | "timeout" | "storage" | "identity" | "scope" | "disconnected" | "background" | "limited" | "catalog" | "expired" | "network" | "pending" | "callback" | "unavailable";
 type Failure = Error & { code: FailureCode; oauthCode?: string };
 const fail = (code: FailureCode): Failure => Object.assign(new Error(code), { code });
 const MESSAGES: Record<FailureCode, string> = {
@@ -33,6 +33,7 @@ const MESSAGES: Record<FailureCode, string> = {
 	identity: "ChatGPT sign-in could not be verified. Select the intended saved account and try again.",
 	scope: "ChatGPT plan permission is missing. Reconnect and authorize ChatGPT plan use.",
 	disconnected: "This ChatGPT connection is disconnected. Reconnect in Providers.",
+	limited: "ChatGPT plan limit reached — background work is held until the usage window resets.",
 	background: "ChatGPT background use is off in this app. Enable Allow background use for all ChatGPT accounts in Providers, or explicitly select an API-key model for that workload.",
 	catalog: "The ChatGPT account model catalog is unavailable. Retry the connection; no API-key fallback was used.",
 	expired: "The ChatGPT session expired. Reconnect in Providers.",
@@ -195,6 +196,10 @@ export function createChatGPT({ store, fetch: request = globalThis.fetch, onChan
 	let catalogError: string | null = null;
 	let lastError: string | null = null;
 	let closed = false;
+	/** The plan limit was hit: background leases are held until then. */
+	let limitedUntil: number | undefined;
+	let limitTimer: ReturnType<typeof setTimeout> | undefined;
+	let onLimitLift: (() => void) | undefined;
 	let suspended = false;
 	let retryRegistration: RetryRegistration | undefined;
 	let transportAbort = new AbortController();
@@ -267,6 +272,7 @@ export function createChatGPT({ store, fetch: request = globalThis.fetch, onChan
 			pending: !!pending,
 			...(pending && !pending.consumed ? { signInUrl: pending.url } : {}),
 			allowBackgroundUse: backgroundAllowed(),
+			...(limitedUntil !== undefined ? { limitedUntil: new Date(limitedUntil).toISOString() } : {}),
 			activeId: state?.activeId ?? null,
 			accounts: accountGroups().map((members) => {
 				// Preserve the actual active registration ID at the private transport
@@ -434,6 +440,7 @@ export function createChatGPT({ store, fetch: request = globalThis.fetch, onChan
 		if (!planScopes(account.tokens)) throw fail("scope");
 		if (expected && (expected.expectedAccountId !== account.id || expected.expectedAuthorityRevision !== authorityRevision || !catalog.some((m) => m.id === expected.selectedModelId))) throw fail("catalog");
 		if (background && !backgroundAllowed()) throw fail("background");
+		if (background && limitedUntil !== undefined && Date.now() < limitedUntil) throw fail("limited");
 		return account as Registration & { tokens: Tokens };
 	}
 	async function credential(background: boolean, expected?: LeaseExpectation) {
@@ -636,8 +643,32 @@ export function createChatGPT({ store, fetch: request = globalThis.fetch, onChan
 			return snapshot();
 		});
 	}
-	function close() { closed = true; pending?.cancel(); stop(); }
-	return { status, login, complete, cancelLogin, lease, models, planUsage, select, consent, disconnect, logout, close, stamp };
+	/** Hold background work until `until` (ms). Re-checked at that time by
+	 *  `recheck` (fresh usage) — still exhausted re-arms, otherwise the hold
+	 *  lifts and every watcher resumes its deferred work. */
+	function markLimited(until: number, recheck: () => Promise<number | undefined>, onLift?: () => void) {
+		clearTimeout(limitTimer);
+		limitedUntil = until;
+		if (onLift) onLimitLift = onLift;
+		stop(true); // background streams stop; foreground continues
+		limitTimer = setTimeout(async () => {
+			const next = await recheck().catch(() => undefined);
+			if (next !== undefined && next > Date.now()) markLimited(next, recheck);
+			else clearLimit();
+		}, Math.max(1_000, until - Date.now()));
+		(limitTimer as { unref?: () => void }).unref?.();
+	}
+	function clearLimit() {
+		clearTimeout(limitTimer);
+		if (limitedUntil === undefined) return;
+		limitedUntil = undefined;
+		notify();
+		const lift = onLimitLift;
+		onLimitLift = undefined;
+		lift?.();
+	}
+	function close() { closed = true; clearTimeout(limitTimer); pending?.cancel(); stop(); }
+	return { status, login, complete, cancelLogin, lease, models, planUsage, markLimited, clearLimit, select, consent, disconnect, logout, close, stamp };
 }
 
 export type ChatGPTService = ReturnType<typeof createChatGPT>;

@@ -50,7 +50,7 @@ import { MermaidOverlay, SessionMermaidContext } from "@/components/session-over
 import { AbortTurnDialog, type AbortMode } from "@/components/abort-turn-dialog";
 import { ArrowRightIcon, DumbbellIcon, MapIcon, WaypointsIcon } from "lucide-react";
 import Link from "next/link";
-import type { PlanBlockData, TopicTargetDetails } from "@/src/core";
+import type { PaperOutlineDetails, PlanBlockData, TopicTargetDetails } from "@/src/core";
 import { QuestionDock } from "@/components/question-dock";
 import { SessionFind } from "@/components/session-find";
 import { SessionMessageNavigation } from "@/components/session-navigation";
@@ -58,6 +58,7 @@ import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
 import { TopicTargetCard } from "@/components/topic-target-card";
+import { PaperOutlineCard } from "@/components/paper-outline-card";
 import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
@@ -1239,7 +1240,7 @@ export function Chat({
 								spellCheck={false}
 								aria-label="Session title"
 								title="Rename this session"
-								className="min-w-[8ch] max-w-[70%] shrink-0 bg-transparent font-title text-3xl tracking-tight caret-current outline-none [field-sizing:content]"
+								className="min-w-[8ch] max-w-[70%] shrink-0 bg-transparent font-title text-xl tracking-tight sm:text-3xl caret-current outline-none [field-sizing:content]"
 							/>
 							{/* flex-1 spacer during rename too, so the chips stay at
 							    the right edge; clicks here commit via the header
@@ -1260,7 +1261,7 @@ export function Chat({
 								setTitleDraft(titleText);
 								setRenaming(true);
 							}}
-							className="-mx-1.5 min-w-4 shrink cursor-text truncate rounded-md px-1.5 text-left font-title text-3xl tracking-tight transition-colors hover:bg-accent"
+							className="-mx-1.5 min-w-4 shrink cursor-text truncate rounded-md px-1.5 text-left font-title text-xl tracking-tight sm:text-3xl transition-colors hover:bg-accent"
 						>
 							{titleText}
 							</button>
@@ -1369,6 +1370,8 @@ export function Chat({
 												return <GraphContextCard key={pi} data={part.data as GraphContextData} />;
 											case "data-topic-target":
 												return <TopicTargetCard key={pi} data={part.data as TopicTargetDetails} />;
+											case "data-paper-outline":
+												return <PaperOutlineCard key={pi} data={part.data as PaperOutlineDetails} />;
 											case "data-compaction":
 												return <CompactionMomentDivider key={pi} data={part.data as CompactionDividerData} />;
 											case "data-compaction-cut":

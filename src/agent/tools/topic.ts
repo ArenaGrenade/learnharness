@@ -46,6 +46,7 @@ export function renderTopicMap(record: TopicRecord, link: ChatTopicLink, now = D
 			const prereqs = c.prerequisites.length ? ` — rests on: ${c.prerequisites.map(name).join(", ")}` : c.foundation ? " — foundation" : " — no prerequisites recorded";
 			lines.push(`- [${c.id}] ${c.name}: ${s.status.toUpperCase()}${prereqs}`);
 			lines.push(`    ${c.description}`);
+			if (c.sources?.length) lines.push(`    sources: ${c.sources.map((s) => s.title).join("; ")}`);
 			if (s.note) lines.push(`    evidence: ${s.note}`);
 		}
 	}

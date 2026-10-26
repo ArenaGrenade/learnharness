@@ -45,9 +45,10 @@ function update(id: string, change: (record: TopicRecord) => TopicRecord): Topic
 }
 
 export const topicStore: TopicStore = {
-	createTopic({ id, title, mapChatId }) {
+	createTopic({ id, title, mapChatId, source }) {
 		const now = new Date().toISOString();
 		return write({
+			...(source ? { source } : {}),
 			id,
 			title: title.trim() || "Untitled topic",
 			mapChatId,
@@ -78,6 +79,9 @@ export const topicStore: TopicStore = {
 	},
 	markMapped(id, at) {
 		return update(id, (record) => ({ ...record, mappedAt: at }));
+	},
+	updateSource(id, patch, title) {
+		return update(id, (record) => record.source ? ({ ...record, ...(title?.trim() ? { title: title.trim().slice(0, 200) } : {}), source: { ...record.source, ...patch } }) : record);
 	},
 	deleteTopic(id) {
 		try {

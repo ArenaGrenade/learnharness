@@ -34,7 +34,6 @@ import {
 	type AgentSettings,
 	type BackgroundModelRole,
 	type FactorySettings,
-	type GeneralSettings,
 	type CompactionSettings,
 	type GraphSettings,
 	type ModelSlot,
@@ -68,7 +67,6 @@ export type EffectiveAppearance = FactorySettings["appearance"];
 
 /** The concrete view: every knob resolved, no absent fields. */
 export interface EffectiveSettings {
-	general: Required<GeneralSettings>;
 	agent: {
 		models: Record<BackgroundModelRole, EffectiveModelSpec | undefined>;
 		/** Delta map as stored — consumers resolve absent key → enabled. */
@@ -173,9 +171,6 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 		models[role] = resolveModelSpec(role, agent.models?.[role], modelsSection);
 	}
 	return {
-		general: {
-			autoUpdate: record?.general?.autoUpdate ?? FACTORY_SETTINGS.general.autoUpdate,
-		},
 		agent: {
 			models,
 			tools: agent.tools ?? {},

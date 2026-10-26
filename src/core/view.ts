@@ -365,6 +365,16 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "paper-outline": {
+			// A paper topic's traced outline (learn-from-a-paper): a card above
+			// the first user message of the mapping conversation.
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-paper-outline", id: `po_${marker.id}`, data: marker.details }],
+			});
+			return;
+		}
 		case "probe-handoff": {
 			out.push({
 				id: marker.id,

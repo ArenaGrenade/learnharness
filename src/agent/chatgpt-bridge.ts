@@ -12,7 +12,7 @@ interface BridgeState {
 }
 /** The server's in-process credential owner (src/server/connections), plugged
  * in by the composition root. The agent layer never imports it directly. */
-export interface ChatGPTHost { request(op: "status" | "models" | "lease", fields: Record<string, unknown>): Promise<unknown> }
+export interface ChatGPTHost { request(op: "status" | "models" | "lease" | "limit", fields: Record<string, unknown>): Promise<unknown> }
 export interface ChatGPTStateChange { kind: "state"; stamp: Stamp; status: ChatGPTStatus; invalidate?: string }
 const key = Symbol.for("lh.chatgpt.bridge");
 const unavailable = (): ChatGPTStatus => ({ available: false, pending: false, allowBackgroundUse: true, activeId: null, accounts: [], error: null });
@@ -54,14 +54,19 @@ function acceptStatus(state: BridgeState, value: StatusValue) {
  state.status = value.status; state.stamp = { epoch: value.epoch, authorityRevision: value.authorityRevision, revision: value.revision };
 }
 /** In-process only. No HTTP credential route or renderer method. */
-export async function chatGPTRequest<T>(op: "status" | "models" | "lease", fields: Record<string, unknown> = {}): Promise<T> {
+export async function chatGPTRequest<T>(op: "status" | "models" | "lease" | "limit", fields: Record<string, unknown> = {}): Promise<T> {
  const host = bridge().host;
  if (!host) throw new Error("The ChatGPT connection is unavailable in this process.");
  return await host.request(op, fields) as T;
 }
 export function chatGPTStatus(): ChatGPTStatus { return bridge().status; }
+/** A request hit the plan's usage limit (web host, 2026-10-26): the host
+ *  holds background work until the window resets. Fire-and-forget. */
+export function reportChatGPTLimit(): void { void chatGPTRequest("limit").catch(() => {}); }
+/** Held while the plan limit lasts (background only). */
+function chatGPTLimited(s: ChatGPTStatus): boolean { return !!s.limitedUntil && Date.parse(s.limitedUntil) > Date.now(); }
 export function chatGPTConnected(): boolean { const s = chatGPTStatus(); return hostConnected() && s.available && s.accounts.some((a) => a.id === s.activeId && a.connected && a.planEnabled === true); }
-export function chatGPTBackgroundAllowed(): boolean { const s = chatGPTStatus(); return chatGPTConnected() && s.allowBackgroundUse === true; }
+export function chatGPTBackgroundAllowed(): boolean { const s = chatGPTStatus(); return chatGPTConnected() && s.allowBackgroundUse === true && !chatGPTLimited(s); }
 export function onChatGPTChange(listener: () => void): () => void { bridge().listeners.add(listener); return () => { bridge().listeners.delete(listener); }; }
 export function chatGPTModels(): Model<"openai-responses">[] { return bridge().models; }
 export function chatGPTModel(id: string): Model<"openai-responses"> | undefined { return chatGPTModels().find((m) => m.id === id); }

@@ -1,4 +1,5 @@
 import { openAlphaxivTools } from "./mcp/alphaxiv.ts";
+import { recordPracticeEvidence } from "./topics.ts";
 import type { Usage } from "@earendil-works/pi-ai";
 import {
 	createMapperAgent,
@@ -438,6 +439,8 @@ export async function handleChatInput(
 							searchAvailable,
 						},
 						...(graphToolsEnabled(effective) ? { graph: { chatStore: stores.chatStore, graphStore: stores.graphStore } } : {}),
+						// Practice outcomes become topic evidence (topics wave).
+						onConclude: (targets, outcome) => { recordPracticeEvidence(chatId, targets, outcome); },
 					},
 					agentOpts,
 				)

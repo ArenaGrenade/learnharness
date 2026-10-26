@@ -7,7 +7,7 @@ import { probeDoneTool } from "../src/agent/tools/probe.ts";
 import { lessonCompleteTool } from "../src/agent/tools/topic.ts";
 import { createTeacherTools } from "../src/agent/tools.ts";
 import { projectView } from "../src/core/view.ts";
-import { createTopic, getTopic, startCheckup, startLearning } from "../src/server/topics.ts";
+import { createTopic, getTopic, startCheckup, startLearning, topicLinks } from "../src/server/topics.ts";
 import { stores } from "../src/server/stores.ts";
 
 const record = (): TopicRecord => ({
@@ -103,5 +103,67 @@ describe("starting sessions from a topic (scratch data)", () => {
 		assert.equal(startLearning(topic.id, "c_att", "repair").prompt, "I want to fix my understanding of Attention.");
 		assert.throws(() => startLearning(topic.id, "c_missing", "learn"), /Component not found/);
 		assert.equal(getTopic("topic_nope"), null);
+	});
+});
+
+describe("component links (derived)", () => {
+	it("lists targeted sessions and the propositions born in them, nothing else", () => {
+		const { topic } = createTopic("Linked topic");
+		stores.topicStore.saveComponents(topic.id, record().components);
+		const learn = startLearning(topic.id, "c_att", "learn");
+		const other = stores.chatStore.createChat("unrelated session");
+		const node = (id: string, chatId: string) => ({ id, name: `N ${id}`, statement: `S ${id}`, aliases: [], createdAt: "2026-10-26T00:00:00.000Z", provenance: [{ chatId, messageId: "m1" }] });
+		stores.graphStore.appendNode(node("n_link_born", learn.chatId));
+		stores.graphStore.appendNode(node("n_link_other", other.id));
+		const links = topicLinks(topic.id);
+		assert.deepEqual(Object.keys(links), ["c_att"]);
+		assert.deepEqual(links.c_att!.sessions, [{ chatId: learn.chatId, title: "Attention", purpose: "learn" }]);
+		assert.deepEqual(links.c_att!.propositions, [{ id: "n_link_born", name: "N n_link_born", statement: "S n_link_born" }]);
+	});
+});
+
+describe("practice as topic evidence (owner mapping, 2026-10-26)", () => {
+	it("maps outcomes: solved → held; hints or surrender → shaky; moved on/dismissed → nothing", async () => {
+		const { practiceVerdict } = await import("../src/server/topics.ts");
+		assert.deepEqual(["solved", "solvedWithHints", "surrendered", "movedOn", "dismissed"].map(practiceVerdict), ["held", "shaky", "shaky", null, null]);
+	});
+
+	it("records on the components whose linked propositions the problem targets (by id or name)", async () => {
+		const { recordPracticeEvidence } = await import("../src/server/topics.ts");
+		const { topic } = createTopic("Practice-linked topic");
+		stores.topicStore.saveComponents(topic.id, record().components);
+		const learn = startLearning(topic.id, "c_sm", "learn");
+		stores.graphStore.appendNode({ id: "n_practice_target", name: "Softmax sums to one", statement: "s", aliases: [], createdAt: "2026-10-26T00:00:00.000Z", provenance: [{ chatId: learn.chatId, messageId: "m1" }] });
+		assert.equal(recordPracticeEvidence("chat_practice", ["n_unrelated"], "solved"), 0);
+		assert.equal(recordPracticeEvidence("chat_practice", ["n_practice_target"], "movedOn"), 0);
+		assert.equal(recordPracticeEvidence("chat_practice", ["Softmax sums to one"], "solved"), 1, "names resolve to ids");
+		const t = getTopic(topic.id)!;
+		const e = t.evidence.at(-1)!;
+		assert.deepEqual({ c: e.componentId, k: e.kind, v: e.verdict, chat: e.chatId }, { c: "c_sm", k: "practice", v: "held", chat: "chat_practice" });
+		assert.equal(componentState(t, "c_sm").status, "held");
+	});
+
+	it("the practice conclude tool reports the active problem's targets and outcome", async () => {
+		const { practiceTools } = await import("../src/agent/tools/practice.ts");
+		const reports: Array<[string[], string]> = [];
+		const messages = [
+			{ id: "u1", role: "user", content: "go", timestamp: 1 },
+			{ id: "a1", role: "assistant", content: [{ type: "toolCall", id: "p1", name: "problem", arguments: { statement: "s", mode: "recall", target: ["n_x"] } }], timestamp: 2 },
+			{ id: "r1", role: "toolResult", toolCallId: "p1", toolName: "problem", content: [{ type: "text", text: "posed" }], isError: false, timestamp: 3 },
+		];
+		const tools = practiceTools({ chatId: "c", chatStore: { getChat: () => ({ messages: messages as never }) }, onConclude: (targets, outcome) => reports.push([targets, outcome]) });
+		await tools.conclude!.execute("c1", { outcome: "solvedWithHints", verdict: "credited" }, undefined as never);
+		assert.deepEqual(reports, [[["n_x"], "solvedWithHints"]]);
+	});
+});
+
+describe("the mapper's prompts in settings", () => {
+	it("gets its own section; shared stays listed once", async () => {
+		const { sectionedSegments } = await import("../components/settings/agent-section.tsx");
+		const seg = (path: string, shared = false) => ({ path, sourceText: "", overrideText: null, enabled: false, shared });
+		const sections = sectionedSegments({ teacher: [seg("teacher/a.md"), seg("system-prompt.md", true)], prober: [seg("prober/a.md"), seg("system-prompt.md", true)], mapper: [seg("mapper/10-mapping-doctrine.md"), seg("system-prompt.md", true)] });
+		assert.deepEqual(sections.map((s) => s.id), ["teacher", "prober", "mapper", "shared"]);
+		assert.deepEqual(sections[2]!.segments.map((s) => s.path), ["mapper/10-mapping-doctrine.md"]);
+		assert.equal(sections[3]!.hint, "Used by the teacher, prober and topic mapper");
 	});
 });

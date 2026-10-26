@@ -6,4 +6,7 @@ export async function register() {
 	if (process.env.NEXT_RUNTIME !== "nodejs") return;
 	const { connectionHost } = await import("./src/server/connections/host.ts");
 	connectionHost();
+	// The daily What-next digest (push notifications).
+	const { startPushScheduler } = await import("./src/server/push.ts");
+	startPushScheduler();
 }

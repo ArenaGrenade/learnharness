@@ -112,6 +112,8 @@ The server checks the pasted address against the sign-in it started (the one-tim
 
 Tokens and refresh handles are stored in `data/credentials/chatgpt-credentials.json` (mode `0600`). Only the server reads them; the browser only ever sees account status.
 
+When the plan's usage limit is hit, a banner shows when it resets. Until then background work (graph extraction, research, paper tracing) pauses, and messages you send yourself still go out. Background work resumes on its own at the reset. The plan's live usage shows in **Settings → Providers → ChatGPT**, and under the composer whenever a ChatGPT model is selected.
+
 GitHub Copilot and Grok use device-code sign-in instead. The dialog shows a code, and **Open sign-in page** opens the provider's page in a new tab.
 
 ## 6. Research sources (optional)
@@ -121,6 +123,24 @@ The researcher sub-agent searches and reads the web for the teacher. Configure i
 - **SearXNG**: if you run a SearXNG instance (for example in Docker), set **SearXNG** to its base URL, such as `http://127.0.0.1:9180`. It must allow the JSON format: `search.formats` in its `settings.yml` must include `json`. When it's set, it's preferred over Tavily and Brave. It's local and free, and no API key is needed.
 - **alphaXiv**: create a key under alphaXiv Settings → API Keys and paste it into **alphaXiv**. Research jobs then also get alphaXiv's paper tools: paper search, reports and full text, questions answered from a paper's PDF, and its code. Only read tools are exposed; nothing changes your alphaXiv library.
 
+## 7. Install on your phone and turn on notifications
+
+LearnHarness installs as an app from the browser:
+
+- **iPhone / iPad (Safari):** Share → **Add to Home Screen**, then open LearnHarness from the home screen. iOS only delivers notifications to the installed app, not to a Safari tab.
+- **Android (Chrome):** menu → **Install app** (or **Add to Home screen**).
+
+Then open **Settings → Notifications** on that device and turn on **Notifications on this device**. You get:
+
+- a daily digest of what is waiting across your topics, at the time you set (server time), only when something is;
+- an alert when the ChatGPT plan limit is hit, and another when it resets.
+
+**Send a test** checks delivery. Notifications travel through the browser vendor's push service (Apple, Google or Mozilla). This needs outbound access only; the tunnel needs no extra configuration. Each device is turned on separately.
+
+## 8. Learning from a paper
+
+On **+ Topic**, give an arXiv id or link (for example `1706.03762` or `https://arxiv.org/abs/1706.03762`). A background tracer reads the paper and follows its citations, at most 2 levels deep and 10 papers, to where its core methods and ideas come from. That takes a minute or two. It produces an outline of concepts, each with the papers it comes from, and mapping then probes what you already know against that outline. With an alphaXiv key the tracer uses alphaXiv's paper tools; without one it reads arXiv PDFs directly.
+
 ## Files
 
 | Path | What |
@@ -128,6 +148,7 @@ The researcher sub-agent searches and reads the web for the teacher. Configure i
 | `data/credentials/access.json` | passphrase hash + session key |
 | `data/credentials/chatgpt-credentials.json` | ChatGPT OAuth credentials |
 | `data/credentials/{github-copilot,xai}-credentials.json` | Copilot / Grok OAuth credentials |
+| `data/credentials/push.json` | push keys (VAPID) and notification devices |
 | `data/topics/` | topic maps and their evidence logs |
 | `auth.json` (repo root, or `LH_AUTH_FILE`) | API keys entered in Settings → Keys |
 | `data/` | chats, graph, jobs, settings |

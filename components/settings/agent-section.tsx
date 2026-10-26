@@ -180,10 +180,13 @@ export function composeSearchEngine(
  *  this line). Exported for the pin. */
 export const PROMPT_IN_USE_HINT = "Your version is in use";
 
+/** The server's per-agent segment lists (GET /api/settings/prompts). */
+export interface PromptsView { prober: SegmentInfo[]; teacher: SegmentInfo[]; mapper?: SegmentInfo[] }
+
 /** One section of the prompt view — the owner's ruled order: Teacher,
  *  Prober, then Shared last. */
 export interface PromptSection {
-	id: "teacher" | "prober" | "shared";
+	id: "teacher" | "prober" | "mapper" | "shared";
 	label: string;
 	/** The one header that earns a hint: "Shared" alone is not
 	 *  self-evident. Teacher/Prober are. */
@@ -199,15 +202,18 @@ export interface PromptSection {
  *  agents' own chunks keep their lists' order — which IS the prompt
  *  assembly order (numeric-prefix filename sort). Pure — exported for
  *  tests. */
-export function sectionedSegments(view: { prober: SegmentInfo[]; teacher: SegmentInfo[] }): PromptSection[] {
-	const own = (who: "prober" | "teacher") => view[who].filter((s) => !s.shared);
+export function sectionedSegments(view: PromptsView): PromptSection[] {
+	const own = (who: "prober" | "teacher" | "mapper") => (view[who] ?? []).filter((s) => !s.shared);
 	return [
 		{ id: "teacher", label: "Teacher", segments: own("teacher") },
 		{ id: "prober", label: "Prober", segments: own("prober") },
+		// The topic mapper (topics wave, 2026-10-26): it composes the same
+		// shared segments as the teacher and prober.
+		...(view.mapper ? [{ id: "mapper" as const, label: "Topic mapper", segments: own("mapper") }] : []),
 		{
 			id: "shared",
 			label: "Shared",
-			hint: "Used by both agents",
+			hint: view.mapper ? "Used by the teacher, prober and topic mapper" : "Used by both agents",
 			segments: view.teacher.filter((s) => s.shared),
 		},
 	];
@@ -312,7 +318,7 @@ export function AgentSection({
 	/** Which search engines have a key (/api/keys) — the no-keys-anywhere
 	 *  state grays the row; per-engine marks ride the menu rows. */
 	const [engineKeys, setEngineKeys] = useState<Partial<Record<SearchEngineId, boolean>>>({});
-	const [prompts, setPrompts] = useState<{ prober: SegmentInfo[]; teacher: SegmentInfo[] } | null>(null);
+	const [prompts, setPrompts] = useState<PromptsView | null>(null);
 	const [openSegment, setOpenSegment] = useState<string | null>(null);
 	const [segmentDraft, setSegmentDraft] = useState<Record<string, string>>({});
 	const [segmentStatus, setSegmentStatus] = useState<string | null>(null);
@@ -337,7 +343,7 @@ export function AgentSection({
 	const readPrompts = useCallback(() => {
 		fetch("/api/settings/prompts")
 			.then((r) => r.json())
-			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body))
+			.then((body: PromptsView) => setPrompts(body))
 			.catch(() => {});
 	}, []);
 
@@ -375,7 +381,7 @@ export function AgentSection({
 		readModels();
 		fetch("/api/settings/prompts")
 			.then((r) => r.json())
-			.then((body: { prober: SegmentInfo[]; teacher: SegmentInfo[] }) => setPrompts(body))
+			.then((body: PromptsView) => setPrompts(body))
 			.catch(() => setPrompts(null));
 		fetch("/api/keys")
 			.then((r) => r.json())

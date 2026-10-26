@@ -8,7 +8,7 @@ import { TopBar } from "@/components/top-bar";
 import { Button } from "@/components/ui/button";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 import { TopicMap, STATUS_LABEL } from "@/components/topic-map";
-import { topicProgress, topicStates, whatNext, type NextItem, type TopicRecord } from "@/src/core";
+import { topicProgress, topicStates, whatNext, type ComponentLinks, type NextItem, type TopicRecord } from "@/src/core";
 
 /**
  * THE TOPIC PAGE (topics wave, 2026-10-26): one topic's map, What next,
@@ -23,7 +23,9 @@ export async function startNextItem(item: Pick<NextItem, "kind" | "componentId">
 	const open = (chatId: string, prompt?: string) => navigate(`/chat/${chatId}${prompt ? `?prompt=${encodeURIComponent(prompt)}` : ""}`);
 	const name = topic.components.find((c) => c.id === item.componentId)?.name ?? "";
 	try {
-		if (item.kind === "map") { open(topic.mapChatId, "Let's continue the map."); return null; }
+		// The opening line only sends into an untouched conversation; a paper
+		// topic's first mapping turn names the paper.
+		if (item.kind === "map") { open(topic.mapChatId, topic.components.length ? "Let's continue the map." : `I want to learn ${topic.source?.outline?.title ?? topic.title}.`); return null; }
 		if (item.kind === "checkup" || item.kind === "confirm") {
 			const response = await fetch(`/api/topics/${topic.id}/checkup`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ componentId: item.componentId }) });
 			const body = await response.json() as { chatId?: string; error?: string };
@@ -41,16 +43,20 @@ export async function startNextItem(item: Pick<NextItem, "kind" | "componentId">
 	}
 }
 
-export function TopicView({ initial }: { initial: TopicRecord }) {
+export function TopicView({ initial, initialLinks = {} }: { initial: TopicRecord; initialLinks?: Record<string, ComponentLinks> }) {
 	const router = useRouter();
 	const [topic, setTopic] = useState(initial);
+	const [links, setLinks] = useState(initialLinks);
 	const [selected, setSelected] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const refresh = useCallback(async () => {
 		const response = await fetch(`/api/topics/${initial.id}`, { cache: "no-store" }).catch(() => null);
-		if (response?.ok) setTopic(((await response.json()) as { topic: TopicRecord }).topic);
+		if (!response?.ok) return;
+		const body = (await response.json()) as { topic: TopicRecord; links?: Record<string, ComponentLinks> };
+		setTopic(body.topic);
+		setLinks(body.links ?? {});
 	}, [initial.id]);
 	useServerEvent("topics-changed", (payload) => { if (payload.topicId === initial.id) void refresh(); });
 	useServerResync(() => void refresh());
@@ -75,11 +81,12 @@ export function TopicView({ initial }: { initial: TopicRecord }) {
 	return (
 		<div className="flex h-dvh min-w-0 flex-col" data-testid="topic-view">
 			<TopBar>
-				<h1 className="min-w-0 flex-1 truncate font-title text-3xl tracking-tight">{topic.title}</h1>
+				<h1 className="min-w-0 flex-1 truncate font-title text-xl tracking-tight sm:text-3xl">{topic.title}</h1>
 				<span className="shrink-0 text-xs text-muted-foreground" data-testid="topic-progress">{progress.held}/{progress.total} held</span>
 			</TopBar>
 			<div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
 				<main className="min-w-0 flex-1 p-4 md:overflow-y-auto">
+					{topic.source && <PaperPanel topic={topic} busy={busy} onStart={() => void run({ kind: "map" })} />}
 					{topic.goal && <p className="mb-4 text-sm text-muted-foreground">Goal: <span className="text-foreground">{topic.goal}</span></p>}
 					{topic.components.length ? (
 						// Scrolls sideways inside its own box on narrow screens: the
@@ -87,12 +94,12 @@ export function TopicView({ initial }: { initial: TopicRecord }) {
 						<div className="overflow-x-auto">
 							<TopicMap components={topic.components} statusOf={(id) => states[id]?.status ?? "unprobed"} selected={selected} onSelect={setSelected} />
 						</div>
-					) : (
+					) : !topic.source ? (
 						<div className="flex flex-col items-start gap-3 text-sm text-muted-foreground">
 							<p>No map yet. The mapping conversation pins down your goal, lays out the concepts it rests on and probes each one.</p>
 							<Button variant="outline" size="sm" onClick={() => void run({ kind: "map" })} disabled={busy}>Start mapping</Button>
 						</div>
-					)}
+					) : null}
 					{topic.components.length > 0 && (
 						<p className="mt-4 text-xs text-muted-foreground" data-testid="topic-legend">
 							Solid = held · dashed = not held yet · dotted = not probed · <span className="text-amber-300">amber</span> = shaky or check-up due · <span className="text-red-300">red</span> = misconception
@@ -108,6 +115,13 @@ export function TopicView({ initial }: { initial: TopicRecord }) {
 							{topic.evidence.filter((e) => e.componentId === component.id).slice(-4).reverse().map((e, i) => (
 								<p key={i} className="text-xs text-muted-foreground"><span className="text-foreground/80">{e.at.slice(0, 10)} {e.kind}{e.verdict ? ` · ${e.verdict}` : ""}:</span> {e.note} <Link href={`/chat/${e.chatId}`} className="underline underline-offset-2">open</Link></p>
 							))}
+							{component.sources?.length ? (
+								<div className="text-xs" data-testid="topic-component-sources">
+									<p className="text-muted-foreground/70">Comes from</p>
+									{component.sources.map((s, i) => <a key={i} href={s.url} target="_blank" rel="noreferrer" className="block truncate underline-offset-2 hover:underline">{s.title}</a>)}
+								</div>
+							) : null}
+							{links[component.id] && <ComponentLinksList links={links[component.id]!} />}
 							<div className="flex flex-wrap gap-2 pt-1">
 								<Button variant="outline" size="xs" disabled={busy} onClick={() => void run({ kind: states[component.id]!.status === "misconception" ? "repair" : "learn", componentId: component.id })}>{states[component.id]!.status === "misconception" ? "Repair" : "Learn"}</Button>
 								<Button variant="ghost" size="xs" disabled={busy || states[component.id]!.status === "unprobed"} onClick={() => void run({ kind: "checkup", componentId: component.id })}>Check-up</Button>
@@ -153,5 +167,64 @@ export function TopicView({ initial }: { initial: TopicRecord }) {
 				</aside>
 			</div>
 		</div>
+	);
+}
+
+/** A component's derived links: the sessions taught for it and the graph
+ *  propositions they produced (statement on expand). */
+function ComponentLinksList({ links }: { links: ComponentLinks }) {
+	return (
+		<div className="space-y-2 pt-1 text-xs" data-testid="topic-component-links">
+			{links.sessions.length > 0 && (
+				<div>
+					<p className="text-muted-foreground/70">Sessions</p>
+					{links.sessions.map((s) => (
+						<Link key={s.chatId} href={`/chat/${s.chatId}`} className="block truncate underline-offset-2 hover:underline">{s.purpose === "repair" ? "Repair · " : ""}{s.title}</Link>
+					))}
+				</div>
+			)}
+			{links.propositions.length > 0 && (
+				<div>
+					<p className="text-muted-foreground/70">In your knowledge graph ({links.propositions.length})</p>
+					{links.propositions.map((p) => (
+						<details key={p.id} className="group">
+							<summary className="cursor-pointer list-none truncate text-foreground/90 hover:text-foreground">{p.name}</summary>
+							<p className="pb-1 pl-2 text-muted-foreground">{p.statement}</p>
+						</details>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/** A paper topic's trace: progress while tracing, the error with a retry,
+ *  and once ready the outline summary with the way into mapping. */
+function PaperPanel({ topic, busy, onStart }: { topic: TopicRecord; busy: boolean; onStart: () => void }) {
+	const source = topic.source!;
+	const [retrying, setRetrying] = useState(false);
+	const retry = async () => {
+		setRetrying(true);
+		await fetch(`/api/topics/${topic.id}/trace`, { method: "POST" }).catch(() => null);
+		setRetrying(false);
+	};
+	return (
+		<section className="mb-5 space-y-2 rounded-lg border border-border p-3 text-sm" data-testid="topic-paper">
+			<p className="text-xs text-muted-foreground">Paper · <a href={source.url} target="_blank" rel="noreferrer" className="underline underline-offset-2">{source.arxivId}</a></p>
+			{source.status === "tracing" && <p className="text-muted-foreground" data-testid="topic-paper-tracing">Tracing citations to the core ideas… <span className="font-mono text-xs">{source.progress}</span></p>}
+			{source.status === "error" && (
+				<div className="space-y-2">
+					<p className="text-red-400">{source.error}</p>
+					<Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>Retry the trace</Button>
+				</div>
+			)}
+			{source.status === "ready" && source.outline && (
+				<div className="space-y-2">
+					<p className="text-muted-foreground">{source.outline.summary}</p>
+					<p className="text-xs text-muted-foreground">{source.outline.concepts.length} core concepts traced through {source.outline.papers.length} papers.</p>
+					{!topic.components.length && <Button variant="outline" size="sm" disabled={busy} onClick={onStart}>Start mapping</Button>}
+				</div>
+			)}
+		</section>
 	);
 }

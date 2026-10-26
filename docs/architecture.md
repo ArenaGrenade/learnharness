@@ -396,9 +396,9 @@ Practice turns the graph into problem sets the learner reasons through out loud.
 
 ## 7.5 Topics — maps, evidence, What next (topics wave, owner design 2026-10-26)
 
-A **topic** is a learning target with a **map**: concept-grain components (the size one teaching session takes) as a prerequisite DAG, plus an append-only **evidence log** of the learner's measured standing on each. This deliberately reverses the 2026-09-29 "no understanding levels anywhere" ruling, at the component grain only: graph propositions still carry no levels, and practice grades are still not evidence (deferred to v2).
+A **topic** is a learning target with a **map**: concept-grain components (the size one teaching session takes) as a prerequisite DAG, plus an append-only **evidence log** of the learner's measured standing on each. This deliberately reverses the 2026-09-29 "no understanding levels anywhere" ruling, at the component grain only: graph propositions still carry no levels. Practice grades became evidence on 2026-10-26 (see **Practice evidence** below).
 
-- **Records.** `data/topics/<id>.json` (`TopicRecord`, `contracts/topic.ts`); the topic store (`src/store/topics.ts`, `TopicStore` port) is the only writer and announces `topics-changed`. Components only grow, through the pure `applyMapComponents`, which refuses unknown references and prerequisite cycles. Evidence entries are `{componentId, kind: map | checkup | session-probe | lesson-complete, verdict?: held | shaky | misconception | missing, note, chatId, at}`.
+- **Records.** `data/topics/<id>.json` (`TopicRecord`, `contracts/topic.ts`); the topic store (`src/store/topics.ts`, `TopicStore` port) is the only writer and announces `topics-changed`. Components only grow, through the pure `applyMapComponents`, which refuses unknown references and prerequisite cycles. Evidence entries are `{componentId, kind: map | checkup | session-probe | lesson-complete | practice, verdict?: held | shaky | misconception | missing, note, chatId, at}`.
 - **Status is derived, never stored** (`core/topic.ts`, browser-safe):
   - no evidence → `unprobed`;
   - a `lesson-complete` newer than every measurement → `taught`;
@@ -423,7 +423,11 @@ A **topic** is a learning target with a **map**: concept-grain components (the s
   - The sidebar's **+ Topic** door and Topics section.
   - Home's What next card (top three across topics).
   - The chat header's Topic map link.
-  - Routes: `/api/topics`, `/api/topics/[id]`, `/api/topics/[id]/checkup` and `/api/topics/[id]/learn`.
+  - Routes: `/api/topics`, `/api/topics/[id]`, `/api/topics/[id]/checkup`, `/api/topics/[id]/learn` and `/api/topics/[id]/trace`.
+- **Component links** (derived, `topicLinks`): a component's targeted sessions, and the graph propositions born in them (`birthSessionOf`). `GET /api/topics/[id]` returns `{topic, links}`; the component panel lists both.
+- **Practice evidence** (owner mapping 2026-10-26). The practice `conclude` tool reports the active problem's targets and outcome (`PracticeToolContext.onConclude`). `recordPracticeEvidence` resolves the targets to propositions, finds the components whose linked propositions include them, and appends `practice` evidence: solved → `held`; solved with hints or surrendered → `shaky`; moved on or dismissed → nothing.
+- **Learning from a paper.** A topic named by an arXiv id or link gets `source: TopicPaperSource` and a background **citation tracer** (`agent/subagents/paper-tracer.ts`, `runSubmitAgent`, role `researcher`). It reads the paper, picks out its core methods and ideas, and follows the citations behind each, bounded at 2 levels and 10 papers. It reads with the alphaXiv tools when that key is set, otherwise arXiv PDFs. Its one deliverable is a `PaperOutline` (concepts as a prerequisite DAG, each with the papers it comes from), validated by `outlineProblems`. On success the topic is renamed to the paper's title and the outline lands in the empty map chat as a `paper-outline` marker (`PaperOutlineCard`); the mapper then probes the learner against it. Components keep up to 8 http(s) `sources`. A failed trace stores the error; `POST /api/topics/[id]/trace` retries (409 while tracing).
+- **The mapper's prompt** is editable in Settings → Agent → Prompts (the "Topic mapper" section) like the teacher's and prober's.
 
 ## 8. Process boundaries (the machine room)
 
@@ -480,9 +484,21 @@ The `LH_DATA_DIR` seam relocates every mutable record, credentials included (als
 - `open` returns the provider page's full https URL for the viewer's browser to open.
 - `components/connection-bridges.ts` is the client half. `SidebarProvider` relays `connections-changed` and channel reconnects to the open dialogs.
 
+**Plan limits** (owner design 2026-10-26). A ChatGPT response that reports the plan's usage limit (`isChatGPTLimitError`) calls `reportChatGPTLimit`; the host's `holdForLimit` reads the plan usage (`wham/usage`) for the reset time: the latest `resetsAt` among windows at 99% or more, otherwise a 30-minute recheck. Until then `ChatGPTStatus.limitedUntil` is set, background leases fail with `limited` (extraction, research and other helpers pause) while foreground sends still go through. At the reset the hold lifts and background work resumes. `ChatGPTLimitBanner` shows the hold, and push sends one alert when it starts and one when it lifts.
+
 **Dispatch.** `subscription-stream.ts` dispatches directly through native providers, retaining native protocol identity on the wire and restoring logical app identity in assistant history. Persisted routes `chatgpt`, `github-copilot-subscription` and `xai-subscription` are distinct from ordinary API routes and never fall back to them.
 
 `subscription-request-cycle.ts` is the shared admission/automatic-input recovery state machine; the old ChatGPT module is its compatibility export. Background consent is independent per provider, default ON, with foreground-preserving cancellation and queue ownership retained on no-dispatch. Native usage rejected before dispatch is transiently excluded from helper usage collectors, without adding persisted provenance fields. Catalogs and read-time pricing preserve the selected connection: subscription use displays compact provider labels, API dollars remain dollars, and mixed usage joins both without estimating subscription dollars or claiming detected tiers/allowances.
+
+### 8.2 Push notifications and the installed app
+
+The app is an installable PWA: `app/manifest.ts`, icons in `public/`, and the service worker `public/sw.js`, which only shows pushes and opens their link on tap. The proxy lets the manifest, service worker and icons through without a session, since browsers fetch them without credentials.
+
+`src/server/push.ts` owns Web Push. One owner-only file, `data/credentials/push.json`, holds the VAPID key pair (generated on first use), the device subscriptions, the digest time and the last digest date. Two kinds of message, by owner decision:
+- **the daily digest** at the set time (default 09:00 server time), sent only when What next has something across topics; `startPushScheduler` (from `instrumentation.ts`) ticks once a minute;
+- **ChatGPT limit alerts**, when the hold starts and when it lifts.
+
+Subscriptions the push service reports gone (404/410) are pruned on send. Routes: `GET/PUT /api/push` (public key, digest time, devices), `POST/DELETE /api/push/subscription`, `POST /api/push/test`. The UI is Settings → Notifications. iOS delivers push only to the app installed from Safari's Share → Add to Home Screen.
 
 ## 9. The foundational invariants — what ALWAYS holds
 
