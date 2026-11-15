@@ -44,7 +44,18 @@ export function chatGPTPayload(raw: unknown, selectedModelId: string): Record<st
 export function chatGPTHistory(context: TranscriptContext, logicalModel: Model<Api>): TranscriptContext {
 	// Apply Pi's normal foreign-model signature treatment BEFORE the alias
 	// becomes openai, or real API-key turns could look like subscription turns.
-	const messages = transformMessages(context.messages, logicalModel);
+	const calls = new Set<string>();
+	const messages = transformMessages(context.messages, logicalModel).filter((message) => {
+		if (message.role === "assistant") {
+			for (const block of message.content) {
+				if (block.type === "toolCall") calls.add(block.id);
+			}
+		}
+		// Pi drops aborted/error assistants but retains their tool results.
+		// The record's interrupted-result synthesis can therefore outlive
+		// its call. Omit it from the request, keeping saved history intact.
+		return message.role !== "toolResult" || calls.has(message.toolCallId);
+	});
 	return { ...context, messages: messages.map((m) => m.role === "assistant" && m.provider === "chatgpt" ? { ...m, provider: "openai" } : m) };
 }
 function empty(model: Model<Api>): AssistantMessage {

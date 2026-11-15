@@ -6,6 +6,7 @@ import { piModels, piEngineForSpec } from "../src/agent/models.ts";
 import { chatGPTAbortController, chatGPTModels, refreshChatGPTModels } from "../src/agent/chatgpt-bridge.ts";
 import { chatGPTHistory, chatGPTPayload } from "../src/agent/chatgpt-stream.ts";
 import { fakeConnectionHost } from "./fake-connection-host.ts";
+import { toLlmMessages, type LhMessage } from "../src/core/native-messages.ts";
 
 const realFetch = globalThis.fetch;
 let host: ReturnType<typeof fakeConnectionHost>;
@@ -89,6 +90,45 @@ test("mixed history never blanket-relabels API providers or reuses foreign reaso
 	assert.deepEqual((transformed.messages[0] as AssistantMessage).content, []);
 	assert.equal((transformed.messages[1] as AssistantMessage).content[0]!.type, "thinking");
 	assert.equal(native.content.length, 1, "source history must not be mutated");
+});
+
+test("replays interrupted histories without orphaned results and preserves valid answers and saved records", async () => {
+	const engine = piEngineForSpec({ provider: "chatgpt", id: model.id }, false);
+	for (const stopReason of ["aborted", "error"] as const) {
+		for (const hasSavedResult of [false, true]) {
+			const assistant: AssistantMessage = {
+				role: "assistant", provider: "chatgpt", api: "openai-responses", model: model.id,
+				content: [{ type: "toolCall", id: "call_valid|fc_valid", name: "scratch_tool", namespace: "learnharness", arguments: { value: "yes" } }],
+				stopReason: "toolUse", timestamp: 1,
+				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			};
+			const saved: LhMessage[] = [
+				{ ...assistant, id: "valid" },
+				{ id: "answer", role: "toolResult", toolCallId: "call_valid|fc_valid", toolName: "scratch_tool", content: [{ type: "text", text: "Retain this real answer" }], isError: false, timestamp: 2 },
+				{ ...assistant, id: "stopped", stopReason, content: [{ type: "toolCall", id: "call_stopped|fc_stopped", name: "quiz", arguments: {} }] },
+				...(hasSavedResult ? [{ id: "stopped-result", role: "toolResult", toolCallId: "call_stopped|fc_stopped", toolName: "quiz", content: [{ type: "text", text: "Interrupted" }], isError: true, timestamp: 3 } as LhMessage] : []),
+				{ id: "continue", role: "user", content: "continue", timestamp: 4 },
+			];
+			const snapshot = structuredClone(saved);
+			let dispatched = 0;
+			const result = await engine.streamFn(engine.model, normalizeContext({ messages: toLlmMessages(saved) }), {
+				fetch: async (input, init) => {
+					dispatched++;
+					const body = await new Request(input, init).json() as { input: Array<{ type: string; call_id?: string; output?: unknown }> };
+					const calls = new Set(body.input.filter((item) => item.type === "function_call").map((item) => item.call_id));
+					const outputs = body.input.filter((item) => item.type === "function_call_output");
+					assert.equal(outputs.length, 1);
+					assert(outputs.every((item) => calls.has(item.call_id)), "every wire result has a surviving call");
+					assert.match(JSON.stringify(outputs), /Retain this real answer/);
+					assert(!JSON.stringify(body).includes("call_stopped"));
+					return new Response(`data: ${JSON.stringify(complete())}\n\n`, { headers: { "content-type": "text/event-stream" } });
+				},
+			}).result();
+			assert.notEqual(result.stopReason, "error", result.errorMessage);
+			assert.equal(dispatched, 1);
+			assert.deepEqual(saved, snapshot, "recovery never rewrites saved chats");
+		}
+	}
 });
 
 test("no terminal completed is never success; late quota/incomplete streams are actionable/redacted", async () => {
