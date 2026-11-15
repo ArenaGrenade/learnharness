@@ -2026,16 +2026,30 @@ function DockOverlay({
 	// gap, carried as --dock-max-h for the docks' scroll areas.
 	const [sbInset, setSbInset] = useState(0);
 	const [dockMaxH, setDockMaxH] = useState<number | null>(null);
+	const [questionMaxH, setQuestionMaxH] = useState<number | null>(null);
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el) return;
 		const measure = () => {
 			setSbInset(Math.round((el.offsetWidth - el.clientWidth) / 2));
 			setDockMaxH(Math.max(el.clientHeight - 32, 160));
+			const block = blockRef.current;
+			const shell = shellRef.current;
+			if (block && shell) {
+				// Include stats, reading-thinking, and padding in the height
+				// budget; the old cap applied to the options alone.
+				setQuestionMaxH(Math.max(0, el.clientHeight - 32 - (block.offsetHeight - shell.offsetHeight)));
+			}
 		};
 		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(el);
+		if (blockRef.current) observer.observe(blockRef.current);
 		window.addEventListener("resize", measure);
-		return () => window.removeEventListener("resize", measure);
+		return () => {
+			observer.disconnect();
+			window.removeEventListener("resize", measure);
+		};
 	}, [scrollRef]);
 
 	// GROWTH MUTE (owner round, 2026-10-05 — the generation churn): during a
@@ -2066,8 +2080,8 @@ function DockOverlay({
 	// native scroll chaining stops at the overlay (the old in-flow dock
 	// chained for free). Internal scrollers — the question area, textarea
 	// overflow, the model menus — keep native scrolling, including their
-	// own edge chaining; only when nothing under the cursor can take the
-	// delta do we forward it to the transcript.
+	// own scrolling. Question edges stay contained so the fold machine
+	// cannot hide the prompt; elsewhere an unused delta reaches the transcript.
 	useEffect(() => {
 		const root = blockRef.current;
 		const el = scrollRef.current;
@@ -2080,6 +2094,12 @@ function DockOverlay({
 			if (e.deltaY === 0) return;
 			for (let n = e.target as HTMLElement | null; n && n !== root; n = n.parentElement) {
 				if (n instanceof HTMLElement && canScroll(n, e.deltaY)) return; // native
+				if (n instanceof HTMLElement && n.dataset.testid === "question-dock") {
+					// Reaching an options/prompt edge must not scroll the
+					// transcript and collapse the question under the pointer.
+					e.preventDefault();
+					return;
+				}
 			}
 			e.preventDefault();
 			el.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1);
@@ -2279,7 +2299,7 @@ function DockOverlay({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div ref={blockRef} className="relative bg-background pb-5" style={{ "--dock-max-h": dockMaxH ? `${dockMaxH}px` : undefined } as React.CSSProperties}>
+			<div ref={blockRef} className="relative bg-background pb-5" style={{ "--dock-max-h": dockMaxH ? `${dockMaxH}px` : undefined, "--question-max-h": questionMaxH !== null ? `${questionMaxH}px` : undefined } as React.CSSProperties}>
 				<div className={DOCK}>
 					{setupCta}
 					{/* The queued-steer indicator (owner spec 2026-10-03): quiet

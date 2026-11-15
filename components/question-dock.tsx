@@ -534,17 +534,20 @@ function QuestionDockForm({
 	// Keep the walked row visible (the question area scrolls internally).
 	useEffect(() => {
 		if (kbdIdx === null) return;
-		rootRef.current
-			?.querySelector(`[data-kbdrow="${kbdIdx}"]`)
-			?.scrollIntoView({ block: "nearest" });
+		const row = rootRef.current?.querySelector<HTMLElement>(`[data-kbdrow="${kbdIdx}"]`);
+		const options = rootRef.current?.querySelector<HTMLElement>('[data-testid="question-options"]');
+		if (!row || !options) return;
+		const bounds = options.getBoundingClientRect();
+		const target = row.getBoundingClientRect();
+		if (target.top < bounds.top) options.scrollTop += target.top - bounds.top;
+		else if (target.bottom > bounds.bottom) options.scrollTop += target.bottom - bounds.bottom;
 	}, [kbdIdx]);
 
 	return (
-		<div ref={rootRef} data-testid="question-dock">
-			{/* Question area — scrolls internally if very tall; the bottom row stays put.
-			    Capped by the measured column (--dock-max-h; the old fixed 55dvh cut
-			    long questions short — owner round, 2026-10-05). */}
-			<div data-session-find-root="" className="max-h-[var(--dock-max-h,55dvh)] overflow-y-auto px-4 pt-3">
+		<div ref={rootRef} data-testid="question-dock" className="flex max-h-[var(--question-max-h,75dvh)] flex-col overflow-hidden">
+			{/* The prompt stays above the options. Exceptionally long prompts
+			    get their own scroll area so answer controls remain reachable. */}
+			<div data-testid="question-prompt" data-session-find-root="" className="max-h-[calc(var(--question-max-h,75dvh)*0.4)] shrink-0 overflow-y-auto overscroll-contain px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					{toolName === "probe"
 						? "Probe"
@@ -567,158 +570,158 @@ function QuestionDockForm({
 						<MessageResponse>{qd.context}</MessageResponse>
 					</div>
 				)}
+			</div>
 
-				{qd.mode !== "text" && (
-					<div className="flex flex-col gap-2 pb-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
-						{qd.options.map((opt, i) => {
-							const isSel = sel.selected.has(i);
-							return (
-								<button
-									key={opt.value}
-									type="button"
-									role={qd.mode === "multi-select" ? "checkbox" : "radio"}
-									aria-checked={isSel}
-									data-kbdrow={i}
-									onClick={() => toggle(i)}
-									className={cn(
-										"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors",
-										isSel ? "border-primary bg-accent" : "hover:bg-accent/50",
-										i === kbdIdx && !isSel && "ring-1 ring-border bg-accent/40",
-									)}
-								>
-									<span
-										className={cn(
-											"mt-0.5 flex size-4 shrink-0 items-center justify-center border",
-											qd.mode === "multi-select" ? "rounded-sm" : "rounded-full",
-											isSel ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
-										)}
-									>
-										{isSel && (
-											<span className={cn(qd.mode === "multi-select" ? "text-base leading-none" : "size-1.5 rounded-full bg-current")}>
-												{qd.mode === "multi-select" ? "✓" : ""}
-											</span>
-										)}
-									</span>
-									<span>
-										<MessageResponse>{opt.label}</MessageResponse>
-										{kind !== "quiz" && opt.description && (
-											// Option subtext renders in Source Sans 3 (owner's mockup);
-											// the "I don't know" copy stays JetBrains Mono. QUIZ options render
-											// NO description (owner ruling 2026-09-26): the model used them to
-											// telegraph correctness — the schema dropped the field and old
-											// records must not leak either. Same MessageResponse path as the
-											// label (owner, 2026-10-12): descriptions are full markdown —
-											// LaTeX included — not plain text.
-											<MessageResponse className="lh-prose block text-xs text-muted-foreground">
-												{opt.description}
-											</MessageResponse>
-										)}
-									</span>
-								</button>
-							);
-						})}
-
-						{kind === "quiz" && (
+			{qd.mode !== "text" && (
+				<div data-testid="question-options" data-session-find-root="" aria-label="Answer options" className="flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain px-4 pb-2" role={qd.mode === "multi-select" ? "group" : "radiogroup"}>
+					{qd.options.map((opt, i) => {
+						const isSel = sel.selected.has(i);
+						return (
 							<button
+								key={opt.value}
 								type="button"
-								onClick={() =>
-									setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }))
-								}
-								data-kbdrow={optionCount}
-								aria-pressed={sel.dontKnow}
-								className={cn(
-									// Option-row layout + radio circle (owner); the dashed
-									// outline stays — this is the deliberate non-answer.
-									"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors",
-									sel.dontKnow ? "border-primary text-foreground" : "text-muted-foreground",
-									kbdIdx === optionCount && !sel.dontKnow && "ring-1 ring-border bg-accent/40",
-								)}
-							>
-								<span
-									className={cn(
-										"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-										sel.dontKnow
-											? "border-primary bg-primary text-primary-foreground"
-											: "border-muted-foreground/40",
-									)}
-								>
-									{sel.dontKnow && <span className="size-1.5 rounded-full bg-current" />}
-								</span>
-								<span>I don't know</span>
-							</button>
-						)}
-
-						{kind === "ask" && (
-							<div
 								role={qd.mode === "multi-select" ? "checkbox" : "radio"}
-								aria-checked={sel.otherSelected}
-								data-testid="other-option"
-								data-kbdrow={optionCount}
-								onClick={selectOther}
+								aria-checked={isSel}
+								data-kbdrow={i}
+								onClick={() => toggle(i)}
 								className={cn(
 									"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors",
-									sel.otherSelected ? "border-primary bg-accent" : "border-dashed hover:bg-accent/50",
-									kbdIdx === optionCount && !sel.otherSelected && "ring-1 ring-border bg-accent/40",
+									isSel ? "border-primary bg-accent" : "hover:bg-accent/50",
+									i === kbdIdx && !isSel && "ring-1 ring-border bg-accent/40",
 								)}
 							>
 								<span
 									className={cn(
 										"mt-0.5 flex size-4 shrink-0 items-center justify-center border",
 										qd.mode === "multi-select" ? "rounded-sm" : "rounded-full",
-										sel.otherSelected
-											? "border-primary bg-primary text-primary-foreground"
-											: "border-muted-foreground/40",
+										isSel ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/40",
 									)}
 								>
-									{sel.otherSelected && (
+									{isSel && (
 										<span className={cn(qd.mode === "multi-select" ? "text-base leading-none" : "size-1.5 rounded-full bg-current")}>
 											{qd.mode === "multi-select" ? "✓" : ""}
 										</span>
 									)}
 								</span>
-								<input
-									ref={otherInputRef}
-									value={other}
-									onChange={(e) => {
-										setOther(e.target.value);
-										// Typing selects the row — displacing in
-										// single-select, alongside the siblings in multi.
-										setSel((prev) => (prev.otherSelected ? prev : toggleOther(selectMode, prev)));
-									}}
-									onKeyDown={(e) => {
-										// Esc escapes the typing (owner refinement round,
-										// 2026-09-24): focus leaves the input, the row STAYS
-										// selected — deselection is the next Space's job, acting
-										// on the row — and the arrow walk resumes from this
-										// row (kbdIdx pins it). stopPropagation keeps the
-										// window chain from reading this Esc as abort-turn.
-										if (e.key === "Escape") {
+								<span>
+									<MessageResponse>{opt.label}</MessageResponse>
+									{kind !== "quiz" && opt.description && (
+										// Option subtext renders in Source Sans 3 (owner's mockup);
+										// the "I don't know" copy stays JetBrains Mono. QUIZ options render
+										// NO description (owner ruling 2026-09-26): the model used them to
+										// telegraph correctness — the schema dropped the field and old
+										// records must not leak either. Same MessageResponse path as the
+										// label (owner, 2026-10-12): descriptions are full markdown —
+										// LaTeX included — not plain text.
+										<MessageResponse className="lh-prose block text-xs text-muted-foreground">
+											{opt.description}
+										</MessageResponse>
+									)}
+								</span>
+							</button>
+						);
+					})}
+
+					{kind === "quiz" && (
+						<button
+							type="button"
+							onClick={() =>
+								setSel((prev) => ({ ...prev, selected: new Set(), otherSelected: false, dontKnow: !prev.dontKnow }))
+							}
+							data-kbdrow={optionCount}
+							aria-pressed={sel.dontKnow}
+							className={cn(
+								// Option-row layout + radio circle (owner); the dashed
+								// outline stays — this is the deliberate non-answer.
+								"flex items-start gap-3 rounded-lg border border-dashed px-3 py-2 text-left text-sm outline-none transition-colors",
+								sel.dontKnow ? "border-primary text-foreground" : "text-muted-foreground",
+								kbdIdx === optionCount && !sel.dontKnow && "ring-1 ring-border bg-accent/40",
+							)}
+						>
+							<span
+								className={cn(
+									"mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+									sel.dontKnow
+										? "border-primary bg-primary text-primary-foreground"
+										: "border-muted-foreground/40",
+								)}
+							>
+								{sel.dontKnow && <span className="size-1.5 rounded-full bg-current" />}
+							</span>
+							<span>I don't know</span>
+						</button>
+					)}
+
+					{kind === "ask" && (
+						<div
+							role={qd.mode === "multi-select" ? "checkbox" : "radio"}
+							aria-checked={sel.otherSelected}
+							data-testid="other-option"
+							data-kbdrow={optionCount}
+							onClick={selectOther}
+							className={cn(
+								"flex items-start gap-3 rounded-lg border px-3 py-2 text-left text-sm outline-none transition-colors",
+								sel.otherSelected ? "border-primary bg-accent" : "border-dashed hover:bg-accent/50",
+								kbdIdx === optionCount && !sel.otherSelected && "ring-1 ring-border bg-accent/40",
+							)}
+						>
+							<span
+								className={cn(
+									"mt-0.5 flex size-4 shrink-0 items-center justify-center border",
+									qd.mode === "multi-select" ? "rounded-sm" : "rounded-full",
+									sel.otherSelected
+										? "border-primary bg-primary text-primary-foreground"
+										: "border-muted-foreground/40",
+								)}
+							>
+								{sel.otherSelected && (
+									<span className={cn(qd.mode === "multi-select" ? "text-base leading-none" : "size-1.5 rounded-full bg-current")}>
+										{qd.mode === "multi-select" ? "✓" : ""}
+									</span>
+								)}
+							</span>
+							<input
+								ref={otherInputRef}
+								value={other}
+								onChange={(e) => {
+									setOther(e.target.value);
+									// Typing selects the row — displacing in
+									// single-select, alongside the siblings in multi.
+									setSel((prev) => (prev.otherSelected ? prev : toggleOther(selectMode, prev)));
+								}}
+								onKeyDown={(e) => {
+									// Esc escapes the typing (owner refinement round,
+									// 2026-09-24): focus leaves the input, the row STAYS
+									// selected — deselection is the next Space's job, acting
+									// on the row — and the arrow walk resumes from this
+									// row (kbdIdx pins it). stopPropagation keeps the
+									// window chain from reading this Esc as abort-turn.
+									if (e.key === "Escape") {
+										e.preventDefault();
+										e.stopPropagation();
+										e.currentTarget.blur();
+										setKbdIdx(optionCount);
+									}
+										// Enter submits directly (owner, keyboard round 2026-10-06):
+										// the custom answer is a single-line input — no newline
+										// to protect, and typing has already selected the row, so
+										// the payload is ready. Every Enter (shift or not — nothing
+										// else could ever happen in a one-line field) rides the
+										// same submit seam as the button, dictation finish-first
+										// included.
+										if (e.key === "Enter") {
 											e.preventDefault();
-											e.stopPropagation();
-											e.currentTarget.blur();
-											setKbdIdx(optionCount);
+											submit();
 										}
-											// Enter submits directly (owner, keyboard round 2026-10-06):
-											// the custom answer is a single-line input — no newline
-											// to protect, and typing has already selected the row, so
-											// the payload is ready. Every Enter (shift or not — nothing
-											// else could ever happen in a one-line field) rides the
-											// same submit seam as the button, dictation finish-first
-											// included.
-											if (e.key === "Enter") {
-												e.preventDefault();
-												submit();
-											}
-									}}
-									placeholder="Type your own answer…"
-									className="lh-input w-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
-									onClick={(e) => e.stopPropagation()}
-								/>
-							</div>
-						)}
-					</div>
-				)}
-			</div>
+								}}
+								placeholder="Type your own answer…"
+								className="lh-input w-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+								onClick={(e) => e.stopPropagation()}
+							/>
+						</div>
+					)}
+				</div>
+			)}
 
 			{/* Confidence (owner, 2026-10-01; UI rounds same day): a snapped
 				slider below the options and above "Your thinking" — the
@@ -734,7 +737,7 @@ function QuestionDockForm({
 				GRAYS it out — the layout holds, no value is sent, the IDK
 				signal stands alone. */}
 			{kind === "quiz" && (
-				<div className="border-t border-border/60 px-4 py-2.5">
+				<div className="shrink-0 border-t border-border/60 px-4 py-2.5">
 					<div className="flex items-center gap-3">
 						<span
 							className={cn(
@@ -817,7 +820,7 @@ function QuestionDockForm({
 			    is for dumping, soon dictated; the button submits); text mode
 			    keeps "Your answer" with Enter-to-submit. */}
 			<form
-				className="border-t border-border/60 p-1.5"
+				className="shrink-0 border-t border-border/60 p-1.5"
 				onSubmit={(e) => {
 					e.preventDefault();
 					submit();

@@ -133,6 +133,14 @@ export function parseExplainInput(input: unknown): ExplainToolInput | undefined 
 	return cleaned;
 }
 
+/** Shared pending gate: a stopped, partially written call is not answerable. */
+export function parseQuestionInput(tool: string, input: unknown): QuizToolInput | AskToolInput | ExplainToolInput | undefined {
+	if (tool === "quiz" || tool === "probe") return parseQuizInput(input);
+	if (tool === "explain" || tool === "recall") return parseExplainInput(input);
+	if (tool === "ask_user_question") return parseAskInput(input);
+	return undefined;
+}
+
 /** probe_done parse — the core-owned schema the tool itself declares. */
 export function parseProbeDoneInput(input: unknown): ProbeDoneInput | undefined {
 	return boundaryParse<ProbeDoneInput>(probeDoneInputSchema, input);

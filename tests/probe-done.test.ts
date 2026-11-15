@@ -88,7 +88,7 @@ describe("probe_done: the probe→planning seam", () => {
 	it("REFUSES while a question is still open — resolve it first", async () => {
 		const chatId = newChat("Probe: open question");
 		chatStore.saveMessages(chatId, [
-			assistantWithCall("m1", "quiz", { question: "q?", options: [{ label: "a" }], correctAnswer: "a" }),
+			assistantWithCall("m1", "quiz", { question: "q?", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "a is correct." }),
 		]);
 		const delivered: SteerMessage[] = [];
 		const tools = probeDoneTool({ chatId, chatStore, deliver: (s) => delivered.push(s) });

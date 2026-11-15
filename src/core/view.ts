@@ -34,9 +34,10 @@
 
 import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { LhMarkerMessage, LhMessage } from "./native-messages.ts";
-import { modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL, problemInputForConclude } from "./native-messages.ts";
+import { INTERRUPTED_TEXT, modelSolutionForConclude, PRACTICE_CONCLUDE_TOOL, problemInputForConclude } from "./native-messages.ts";
 import { activeCompactionOf, type CompactionDetails } from "./compaction.ts";
 import { QUESTION_TOOLS } from "./pending.ts";
+import { parseQuestionInput } from "./tool-parts.ts";
 import type { SubagentArtifactData, SubagentResultMeta } from "./contracts/jobs.ts";
 import type { PlanBlockData } from "./contracts/chat.ts";
 
@@ -309,7 +310,15 @@ function toolPartOf(
 		// message is streaming this turn (its arguments may literally be
 		// mid-write). Anything else is a dangling call from a settled
 		// message — the dock's pending state, never a shimmer.
-		part.state = streamingMessage ? "input-streaming" : "input-available";
+		if (!streamingMessage && (QUESTION_TOOLS as readonly string[]).includes(block.name) && !parseQuestionInput(block.name, block.arguments)) {
+			// Older records can end halfway through a call after Stop. Keep
+			// the raw transcript, but never let that call own the composer.
+			part.state = "output-error";
+			part.rawInput = block.arguments;
+			part.errorText = INTERRUPTED_TEXT;
+		} else {
+			part.state = streamingMessage ? "input-streaming" : "input-available";
+		}
 	}
 	return part;
 }

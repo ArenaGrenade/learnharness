@@ -904,7 +904,7 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 			{
 				id: "a1",
 				role: "assistant",
-				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", choices: ["a", "b"] } as never }],
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "a is correct." } }],
 				api: "openai-completions",
 				provider: "openrouter",
 				model: "test",
@@ -960,7 +960,7 @@ describe("wake pipeline (src/server/jobs.ts)", () => {
 			{
 				id: "a1",
 				role: "assistant",
-				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q" } as never }],
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "a is correct." } }],
 				api: "openai-completions",
 				provider: "openrouter",
 				model: "test",
@@ -1138,7 +1138,7 @@ describe("Wave C: live steering handoff + settlement reconciliation", () => {
 			{
 				id: "a-q",
 				role: "assistant",
-				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", choices: ["a", "b"] } as never }],
+				content: [{ type: "toolCall", id: "quiz-call", name: "quiz", arguments: { question: "q", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "a is correct." } }],
 				api: "openai-completions",
 				provider: "openrouter",
 				model: "test",
@@ -1291,7 +1291,7 @@ describe("persistTurn (native history, Wave B)", () => {
 			{
 				id: "",
 				role: "assistant",
-				content: [{ type: "toolCall", id: "q1", name: "quiz", arguments: { question: "q?" } as never }],
+				content: [{ type: "toolCall", id: "q1", name: "quiz", arguments: { question: "q?", options: [{ label: "a" }, { label: "b" }], correctAnswer: "a", explanation: "a is correct." } }],
 				api: "openai-completions",
 				provider: "openrouter",
 				model: "test",

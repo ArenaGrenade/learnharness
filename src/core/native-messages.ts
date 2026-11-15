@@ -36,6 +36,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { QUESTION_TOOLS } from "./pending.ts";
+import { parseQuestionInput } from "./tool-parts.ts";
 import {
 	CONCLUDE_ACK_TEXT,
 	HANDOFF_TEXT,
@@ -613,6 +614,7 @@ export function danglingQuestionOf(
 			if (block.type !== "toolCall") continue;
 			if (!(QUESTION_TOOLS as readonly string[]).includes(block.name)) continue;
 			if (answered.has(block.id)) continue;
+			if (!parseQuestionInput(block.name, block.arguments)) continue;
 			return { toolCallId: block.id, tool: block.name, input: block.arguments };
 		}
 		return null; // the newest assistant message's questions are all answered
