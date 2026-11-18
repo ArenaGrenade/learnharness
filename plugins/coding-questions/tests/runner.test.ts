@@ -25,16 +25,21 @@ async function assertEmptyWorkspace(dataDirectory: string, questionId: string) {
   assert.deepEqual(await readdir(path.join(dataDirectory, "test-runs", questionId)), []);
 }
 
-function assertDead(pid: number) {
+async function assertDead(pid: number) {
   if (process.platform === "win32") return;
-  try { process.kill(pid, 0); }
-  catch (error) { assert.equal((error as NodeJS.ErrnoException).code, "ESRCH"); return; }
-  // Linux may retain a killed process as a zombie until its init reaps it.
-  if (process.platform === "linux") {
-    const observation = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
-    if (observation.stdout.trim().startsWith("Z")) return;
+  // Signal delivery and init reaping can complete just after the driver's exit.
+  // Still fail a living descendant; allow a bounded scheduler/reaping delay.
+  const deadline = Date.now() + 1000;
+  while (true) {
+    try { process.kill(pid, 0); }
+    catch (error) { assert.equal((error as NodeJS.ErrnoException).code, "ESRCH"); return; }
+    if (process.platform === "linux") {
+      const observation = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
+      if (observation.stdout.trim().startsWith("Z")) return;
+    }
+    if (Date.now() >= deadline) assert.fail(`Process ${pid} is still running`);
+    await delay(10);
   }
-  assert.fail(`Process ${pid} is still running`);
 }
 
 async function waitForFile(file: string): Promise<string> {
@@ -84,7 +89,7 @@ async function cleanupEscaped(pid: number) {
   try { process.kill(-pid, "SIGKILL"); } catch { /* Already gone. */ }
   try { process.kill(pid, "SIGKILL"); } catch { /* Already gone. */ }
   await delay(20);
-  assertDead(pid);
+  await assertDead(pid);
 }
 
 async function within<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
@@ -267,7 +272,7 @@ test("kills inherited-pipe descendants when their driver exits", { skip: process
   const f = await fixture(t);
   const result = await runTests({ ...f, tests: nodeTests(descendantSource, ["", "exit"]) });
   assert.equal(result.status, "passed");
-  for (const pid of JSON.parse(result.stdout)) assertDead(pid);
+  for (const pid of JSON.parse(result.stdout)) await assertDead(pid);
   await assertEmptyWorkspace(f.dataDirectory, f.questionId);
 });
 
@@ -281,7 +286,7 @@ test("abort rejects only after driver/descendant and workspace cleanup; sibling 
   const pids: number[] = JSON.parse(await waitForFile(marker));
   controller.abort();
   await rejected;
-  for (const pid of pids) assertDead(pid);
+  for (const pid of pids) await assertDead(pid);
   assert.equal(await readFile(marker, "utf8"), JSON.stringify(pids));
   await assertEmptyWorkspace(f.dataDirectory, f.questionId);
 });
@@ -296,7 +301,7 @@ test("abort settles and cleans its workspace even after an exited driver leaves 
   try {
     controller.abort();
     await within(rejected, 2000);
-    assertDead(rootPid!);
+    await assertDead(rootPid!);
     await assertEmptyWorkspace(f.dataDirectory, f.questionId);
     // The fixture deliberately escaped the runner's process group. Confirm
     // settlement was not contingent on killing it, then clean it ourselves.
@@ -314,7 +319,7 @@ test("fixed 30 second timeout settles with ordinary and escaped inherited-pipe d
       assert.ok(Date.now() - started >= 29_900);
       assert.equal(result.status, "error");
       assert.match(result.message!, /30 second timeout/);
-      for (const pid of JSON.parse(result.stdout)) assertDead(pid);
+      for (const pid of JSON.parse(result.stdout)) await assertDead(pid);
       assert.equal(await readFile(marker, "utf8"), result.stdout);
       await assertEmptyWorkspace(f.dataDirectory, f.questionId);
     }),
@@ -330,7 +335,7 @@ test("fixed 30 second timeout settles with ordinary and escaped inherited-pipe d
         assert.equal(result.status, "error");
         assert.equal(result.exitCode, 0); // Driver exit observed before deadline.
         assert.match(result.message!, /30 second timeout/);
-        assertDead(rootPid!);
+        await assertDead(rootPid!);
         await assertEmptyWorkspace(f.dataDirectory, f.questionId);
         process.kill(escapedPid!, 0);
       } finally { await cleanupEscaped(escapedPid!); }

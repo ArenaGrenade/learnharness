@@ -19,6 +19,7 @@ Local boundaries:
 - `plugins/coding-questions/src/remote-runner.ts` and `runner/languages.json`:
   private execution transport and the authoritative four-language registry.
   Backend schema, agent tool and browser readiness all derive from this registry.
+  Late capability replies preserve the newest host-controlled code draft.
   Upstream's local runner is retained for reference/tests but the deployed
   backend never imports it or falls back to app-container execution.
 - Topics/paper sessions, evidence and PWA notifications remain native adapters:

@@ -1,5 +1,5 @@
 import type { PluginFrontendContext, PluginProblemRenderer, PluginQuestionRenderer } from "learnharness-plugin-api";
-import { QUESTION_TYPE_ID, PROBLEM_TYPE_ID, type CodingPayload, type CodingQuestionPayload } from "./contract.ts";
+import { QUESTION_TYPE_ID, PROBLEM_TYPE_ID, isReady, type CodingPayload, type CodingQuestionPayload } from "./contract.ts";
 import { mountAnswered, mountAnswerEditor, mountSubmissionEditor } from "./editor.ts";
 import { mountTestResult } from "./result-view.ts";
 import { mountModelSolution } from "./solution-view.ts";
@@ -32,9 +32,12 @@ export function activate(ctx: PluginFrontendContext): () => void {
       void showRunnerCapabilities(status, ctx, props.signal, props.input.payload.language).then(available => {
         if (props.signal.aborted) return;
         allowed = available;
-        props.onChange(allowed || answer.status === "empty" ? answer : { ...answer, status: "unready" });
+        props.onChange(answer.status === "empty" ? answer : { ...answer, status: allowed && typeof answer.value === "string" && isReady(answer.value) ? "ready" : "unready" });
       });
-      return handle;
+      return { ...handle, update(next: Parameters<typeof handle.update>[0]) {
+        answer = next.answer;
+        handle.update(next);
+      } };
     },
     mountAnswered(container, props) {
       if (props.signal.aborted) return;
@@ -72,9 +75,12 @@ export function activate(ctx: PluginFrontendContext): () => void {
       void showRunnerCapabilities(status, ctx, props.signal, props.input.payload.language).then(available => {
         if (props.signal.aborted) return;
         allowed = available;
-        props.onChange(allowed || submission.status === "empty" ? submission : { ...submission, status: "unready" });
+        props.onChange(submission.status === "empty" ? submission : { ...submission, status: allowed && typeof submission.value === "string" && isReady(submission.value) ? "ready" : "unready" });
       });
-      return handle;
+      return { ...handle, update(next: Parameters<typeof handle.update>[0]) {
+        submission = next.submission;
+        handle.update(next);
+      } };
     },
     mountSubmitted(container, props) {
       if (props.signal.aborted) return;

@@ -8,6 +8,7 @@ import puppeteer from "puppeteer-core";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const built = path.join(root, "dist");
+const registry = JSON.parse(fs.readFileSync(path.join(root, "runner/languages.json"), "utf8"));
 const chrome = process.env.CHROME_PATH ?? ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome", "/usr/bin/chromium"].find(file => fs.existsSync(file));
 if (!chrome) throw new Error("Set CHROME_PATH to a local Chrome/Chromium executable.");
 const evidence = fs.mkdtempSync(path.join(os.tmpdir(), "lh-coding-browser-"));
@@ -37,7 +38,11 @@ const ui={mountBadge(container,props,{signal}){
  if(window.abortDuringMarkdownMount)window.host.answeredController.abort();
  return {update,dispose};
 }};
+window.runnerAvailable=true;
+const registry = ${JSON.stringify(registry)};
 const cleanup = activate({ui,
+ registerSettings(){return ()=>{}},
+ async call(operation){if(operation!=='runner-capabilities')throw Error('Unexpected backend call');if(window.holdRunner)await new Promise(resolve=>window.releaseRunner=resolve);return {languages:registry.map(row=>({...row,available:window.runnerAvailable,compilerAvailable:window.runnerAvailable,version:'fixture toolchain'}))}},
  registerQuestionRenderer(value){renderer=value;return ()=>{if(!window.host.practice)window.host.unmount();renderer=null}},
  registerProblemRenderer(value){problemRenderer=value;return ()=>{if(window.host.practice)window.host.unmount();problemRenderer=null}}
 });
@@ -94,6 +99,11 @@ try {
   await page.goto(base);
   await page.waitForFunction(() => window.ready);
   const state = () => page.evaluate(() => window.host.answer);
+  const assertEditorState = async (expected, message = "Published editor state respects runner capabilities") => {
+    const language = await page.evaluate(() => window.host.props.input.payload.language.trim().toLowerCase());
+    const enabled = registry.some(row => [row.id,row.label.toLowerCase(),...row.aliases].includes(language));
+    assert.deepEqual(await state(), {...expected, status:expected.status === 'ready' && !enabled ? 'unready' : expected.status}, message);
+  };
   const field = '#editor [contenteditable="true"]';
   const fillCode = async value => {
     await page.focus(field);
@@ -102,12 +112,12 @@ try {
     await page.keyboard.sendCharacter(value);
   };
   await page.evaluate(() => window.host.mount({starterCode:"def example():\r\n    return 1  \r\n"}));
-  assert.deepEqual(await state(), {status:"ready",value:"def example():\n    return 1  \n"});
+  await assertEditorState( {status:"ready",value:"def example():\n    return 1  \n"});
   await page.waitForFunction(() => document.querySelector('#editor [role="status"]').textContent === "");
   assert.ok(await page.$$eval('#editor .cm-line span', nodes => nodes.some(node => getComputedStyle(node).color !== 'rgb(230, 230, 230)')));
   assert.equal(await page.$eval(field, node => node.closest('form')), null);
   await fillCode("  exact code  \n\n");
-  assert.deepEqual(await state(), {status:"ready",value:"  exact code  \n\n"});
+  await assertEditorState( {status:"ready",value:"  exact code  \n\n"});
   await fillCode(" \t\n");
   assert.equal((await state()).status,"unready");
   assert.equal((await state()).value," \t\n");
@@ -150,14 +160,18 @@ try {
   await page.keyboard.press("Enter");
   await page.keyboard.up(process.platform === "darwin" ? "Meta" : "Control");
   await page.keyboard.press("Escape");
-  assert.deepEqual(await state(),beforeReserved);
+  await assertEditorState(beforeReserved);
   assert.equal(await page.evaluate(() => window.host.submits),1);
   assert.deepEqual(await page.evaluate(() => window.host.reserved),["Shift+Tab"]);
   await fillCode("history");
   const mod=process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.down(mod);await page.keyboard.press("z");await page.keyboard.up(mod);
   assert.notEqual((await state()).value,"history");
-  await page.keyboard.down(mod);await page.keyboard.down("Shift");await page.keyboard.press("z");await page.keyboard.up("Shift");await page.keyboard.up(mod);
+  if(process.platform === 'darwin') {
+    await page.keyboard.down(mod);await page.keyboard.down("Shift");await page.keyboard.press("z");await page.keyboard.up("Shift");await page.keyboard.up(mod);
+  } else {
+    await page.keyboard.down(mod);await page.keyboard.press("y");await page.keyboard.up(mod);
+  }
   assert.equal((await state()).value,"history");
 
   const beforeUpdate = await page.evaluate(() => {
@@ -362,7 +376,7 @@ try {
     await page.waitForFunction(() => document.querySelector('#editor [role="status"]').textContent === '');
     await page.focus(field);
     await page.keyboard.type('<div>');
-    assert.deepEqual(await state(), {status:'ready',value:'<div>'}, `${language} must not enable tag insertion`);
+    await assertEditorState( {status:'ready',value:'<div>'}, `${language} must not enable tag insertion`);
   }
   let held=[],mode='hold',signalHeld;
   const heldRequest=new Promise(resolve=>{signalHeld=resolve});
@@ -387,7 +401,7 @@ try {
   mode='fail';
   await page.evaluate(() => {document.querySelector('#editor').textContent='';window.host.mount({language:'Ruby',starterCode:'value = 1'})});
   await page.waitForFunction(() => document.querySelector('#editor [role="status"]').textContent === 'Plain text');
-  assert.deepEqual(await state(),{status:'ready',value:'value = 1'});
+  await assertEditorState({status:'ready',value:'value = 1'});
   await fillCode('still editable');assert.equal((await state()).value,'still editable');
   mode='pass';
   page.off('request',intercept);await page.setRequestInterception(false);
@@ -407,7 +421,7 @@ try {
   for (const [language, valid, invalid] of diagnosticExamples) {
     await page.evaluate(({language,invalid}) => window.host.mount({language,starterCode:invalid}), {language,invalid});
     await page.waitForSelector(marker);
-    assert.deepEqual(await state(), {status:'ready',value:invalid}, `${language}: diagnostics do not alter code or readiness`);
+    await assertEditorState( {status:'ready',value:invalid}, `${language}: diagnostics do not alter code or readiness`);
     assert.equal(await page.$$eval('#editor .cm-panel-lint, #editor .cm-gutter-lint', nodes=>nodes.length), 0);
     if (language === 'C') {
       await (await page.$('#editor .cm-lintRange-error')).hover();
@@ -425,11 +439,11 @@ try {
       await page.keyboard.press('Enter');
       await page.keyboard.up(process.platform==='darwin'?'Meta':'Control');
       assert.equal(await page.evaluate(()=>window.host.submits), submits+1, 'Syntax errors never prevent host submission');
-      assert.deepEqual(await state(), {status:'ready',value:invalid});
+      await assertEditorState( {status:'ready',value:invalid});
     }
     await fillCode(valid);
     await page.waitForFunction(selector=>!document.querySelector(selector), {}, marker);
-    assert.deepEqual(await state(), {status:'ready',value:valid});
+    await assertEditorState( {status:'ready',value:valid});
   }
 
   // Measure the scheduled update in browser time rather than relying on Node sleeps.
@@ -470,7 +484,7 @@ try {
     await page.waitForFunction(()=>document.querySelector('#editor [role="status"]').textContent!=='Loading highlighting…');
     await new Promise(resolve=>setTimeout(resolve,450));
     assert.equal(await page.$$eval(marker,nodes=>nodes.length),0, `${language}: no unsupported or semantic diagnoses`);
-    assert.deepEqual(await state(),{status:'ready',value:starterCode});
+    await assertEditorState({status:'ready',value:starterCode});
   }
   await page.evaluate(()=>window.host.showAnswered('const value = ;','JavaScript'));
   await page.waitForFunction(()=>document.querySelector('#answered [role="status"]').textContent==='');
@@ -493,10 +507,10 @@ try {
     document.querySelector('#editor').textContent='';h.mount({practice:true,language:'JavaScript',starterCode:code,modelSolution});
     window.practiceEditor=document.querySelector('#editor .cm-editor');
   },{modelSolution:privateSolution,code:wrongCode});
-  assert.deepEqual(await state(),{status:'ready',value:wrongCode});
+  await assertEditorState({status:'ready',value:wrongCode});
   assert.deepEqual(await page.evaluate(()=>['questionId','answer','variant'].map(key=>key in window.host.props)),[false,false,false]);
   await fillCode(' \t\n');
-  assert.deepEqual(await state(),{status:'unready',value:' \t\n'});
+  await assertEditorState({status:'unready',value:' \t\n'});
   await fillCode(wrongCode);
   await page.keyboard.press('End');await page.keyboard.press('Enter');
   assert.equal((await state()).value,wrongCode+'\n','Practice Enter remains a code newline');
@@ -505,7 +519,7 @@ try {
   const practiceFailed={status:'failed',exitCode:1,stdout:'',stderr:'Expected 9, received <script>literal</script>\n',stdoutTruncated:false,stderrTruncated:false};
   await page.evaluate(result=>{const h=window.host;h.update(undefined,false);h.addSubmitted(h.answer.value,{result})},practiceFailed);
   assert.equal(await page.$eval('#editor .cm-content',node=>node.contentEditable),'false');
-  assert.deepEqual(await state(),{status:'ready',value:wrongCode});
+  await assertEditorState({status:'ready',value:wrongCode});
   assert.equal(await page.$eval('#practice-0 .practice-heading',node=>node.textContent),'Coding problemTests failed');
   assert.equal(await page.$$eval('#practice-0 .lh-coding-model-solution, #practice-0 .lh-coding-prompt',nodes=>nodes.length),0,'A practice attempt neither duplicates the statement nor reveals the committed solution');
   assert.equal(await page.evaluate(()=>window.activeMarkdownCount),0);
@@ -526,7 +540,7 @@ try {
   await fillCode(revisedCode);
   const practicePassed={status:'passed',exitCode:0,stdout:'Observed tests passed\n',stderr:'',stdoutTruncated:false,stderrTruncated:false};
   await page.evaluate(result=>{const h=window.host;h.update(undefined,false);h.addSubmitted(h.answer.value,{result});h.update(undefined,true)},practicePassed);
-  assert.deepEqual(await state(),{status:'ready',value:revisedCode});
+  await assertEditorState({status:'ready',value:revisedCode});
   assert.equal(await page.$eval('#practice-1 .practice-heading',node=>node.textContent),'Coding problemTests passed');
   assert.equal(await page.$$eval('#practice-0 .cm-line',nodes=>nodes.map(node=>node.textContent).join('\n')),wrongCode,'Later revisions do not rewrite earlier accepted attempts');
   assert.equal(await page.$$eval('#practice-1 .cm-line',nodes=>nodes.map(node=>node.textContent).join('\n')),revisedCode);
@@ -545,6 +559,20 @@ try {
   await page.evaluate(()=>window.host.records[0].controller.abort());
   assert.equal(await page.$$eval('#practice-0 .cm-editor, #practice-0 .lh-coding-test-result, #practice-0 [data-fixture-badge]',nodes=>nodes.length),0);
   assert.equal(await page.$$eval('#practice-1 .cm-editor, #practice-1 [data-fixture-badge]',nodes=>nodes.length),2,'Aborting an old attempt does not dispose its successor');
+  for(const practice of [false,true]) {
+    await page.evaluate(practice=>{
+      window.holdRunner=true;
+      window.host.mount({practice,language:'python',starterCode:'old draft'});
+      window.host.update({status:'ready',value:'latest controlled draft'});
+      window.releaseRunner();window.holdRunner=false;
+    },practice);
+    assert.deepEqual(await state(),{status:'ready',value:'latest controlled draft'},'Late capability response preserves the newest controlled draft');
+  }
+  await page.evaluate(()=>{window.runnerAvailable=false;window.host.mount({language:'python',starterCode:'print(42)'})});
+  assert.deepEqual(await state(),{status:'unready',value:'print(42)'});
+  assert.match(await page.$eval('[data-testid="execution-capabilities"]',node=>node.textContent),/Python:/);
+  await page.evaluate(()=>{window.runnerAvailable=true;window.host.mount({language:'javascript',starterCode:'const value = 42;'})});
+  assert.deepEqual(await state(),{status:'unready',value:'const value = 42;'},'Highlighting never enables an unsupported execution language');
   await page.evaluate(()=>{window.host.mount({practice:true,language:'C++',starterCode:'int main() {}',modelSolution:'Hidden solution'});window.host.disable()});
   await page.waitForNetworkIdle();
   assert.equal(await page.$$eval('.cm-editor',nodes=>nodes.length),0);
