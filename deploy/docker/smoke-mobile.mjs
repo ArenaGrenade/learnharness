@@ -25,6 +25,19 @@ const browser=await puppeteer.launch({executablePath:process.env.CHROME_PATH ?? 
 const results=[];
 try{
  const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(String(e)));
+ // Persistent event streams and background polling do not imply layout work.
+ // Observe the actual dock until metadata and its resize animation settle.
+ const settle=async()=>{
+  await page.waitForFunction(()=>{
+   const prompt=document.querySelector('[data-testid="question-prompt"]');
+   const bar=document.querySelector('[data-testid="stats-bar"]');
+   if(!prompt || !bar)return false;
+   const r=prompt.getBoundingClientRect(), b=bar.getBoundingClientRect();
+   const signature=[r.top,r.height,b.top,b.height].map(n=>n.toFixed(2)).join('/');
+   if(window.mobileDockGeometry?.signature!==signature)window.mobileDockGeometry={signature,changed:performance.now()};
+   return performance.now()-window.mobileDockGeometry.changed>500;
+  });
+ };
  await page.setRequestInterception(true);
  page.on('request',request=>{
   const url=new URL(request.url());
@@ -96,7 +109,7 @@ try{
    }
    await page.select('[data-testid="settings-mobile-section"]','keys');await page.waitForSelector('[data-testid="chatgpt-connection"]');await page.screenshot({path:path.join(evidence,`settings-${width}.png`)});
    await page.tap('[data-testid="settings-close"]');
-   await go('/chat/'+chat.id);await page.waitForSelector('[data-testid="question-options"]');
+   await go('/chat/'+chat.id);await page.waitForSelector('[data-testid="question-options"]');await settle();
    const prompt=await fit('[data-testid="question-prompt"]',width,height);
    await page.$eval('[data-testid="question-options"]',e=>e.scrollTop=e.scrollHeight);
    assert.equal(await page.$eval('[data-testid="question-prompt"]',e=>e.getBoundingClientRect().top),prompt.top);
