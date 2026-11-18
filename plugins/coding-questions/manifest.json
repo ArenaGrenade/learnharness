@@ -1,0 +1,11 @@
+{
+  "apiVersion": 1,
+  "id": "coding-questions",
+  "name": "Coding questions",
+  "version": "0.1.0",
+  "minAppVersion": "0.4.1",
+  "description": "Teaching questions and coding practice with syntax highlighting and isolated Docker validation for Python, CUDA, C++, and Rust. Reports actual compiler and GPU availability.",
+  "main": "main.js",
+  "backend": "backend.cjs",
+  "styles": "styles.css"
+}

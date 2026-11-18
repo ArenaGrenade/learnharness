@@ -1,3 +1,5 @@
+import { installModalDom } from "./modal-dom.ts";
+import { InteractionLayersProvider } from "../components/interaction-layers.tsx";
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 import assert from "node:assert/strict";
@@ -24,6 +26,7 @@ function controlBridge(service: any, listeners: Set<() => void>, onLogin = () =>
 
 const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
+installModalDom(dom);
 const originalFetch = globalThis.fetch;
 let root: Root | undefined, host: HTMLDivElement | undefined;
 const account = (id = "private-registration-id", email = "learner@example.invalid", connected = true) => ({ id, email, registration: "private-issued-client", connected, planEnabled: connected, canSignInAgain: !connected });
@@ -63,7 +66,7 @@ function recoveryController({ writeFails = false, tokens = "valid" }: { writeFai
 }
 async function mount(children: React.ReactNode = <ChatGPTConnection />) {
  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
- await act(async () => root!.render(<ChatGPTUIProvider>{children}</ChatGPTUIProvider>));
+ await act(async () => root!.render(<InteractionLayersProvider><ChatGPTUIProvider>{children}</ChatGPTUIProvider></InteractionLayersProvider>));
 }
 const byTest = (id: string) => document.querySelector<HTMLElement>(`[data-testid="${id}"]`)!;
 async function click(element: HTMLElement) { assert(element); await act(async () => element.click()); }
@@ -85,8 +88,8 @@ afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); 
 test("Providers is the first/default page; General is last and other pages keep relative order", () => {
  const html = renderToStaticMarkup(<SettingsDialogBody onClose={() => {}} />);
  const ids = [...html.matchAll(/data-testid="settings-nav-([^"]+)"/g)].map((m) => m[1]);
- assert.deepEqual(ids, ["keys", "agent", "appearance", "graph", "keyboard", "general"]);
- assert.match(html, /settings-nav-keys[^>]*aria-current="true"/); assert.match(html, />Providers<\/button>/);
+ assert.deepEqual(ids, ["keys", "agent", "appearance", "graph", "keyboard", "general", "core-plugins", "plugins"]);
+ assert.match(html, /settings-nav-keys[^>]*aria-current="true"/); assert.match(html, />Providers<\/span>/);
  assert.doesNotMatch(html, />Model providers<\/button>/);
 });
 
@@ -97,10 +100,10 @@ test("Providers has exactly four ordered sections; unknown variables stay masked
  };
  fixture(); await mount(<KeysSection />);
  const headings = [...document.querySelectorAll('[data-testid^="group-"] > p')].map((el) => el.textContent);
- assert.deepEqual(headings, ["Model API keys", "Subscriptions", "Dictation", "Connectors"]);
+ assert.deepEqual(headings, ["Model API keys", "Subscriptions", "External CLI", "Dictation", "Search"]);
  assert(byTest("key-deepgram_api_key").closest('[data-testid="group-dictation"]'));
- assert(byTest("key-tavily_api_key").closest('[data-testid="group-connectors"]'));
- assert(byTest("key-brave_api_key").closest('[data-testid="group-connectors"]'));
+ assert(byTest("key-tavily_api_key").closest('[data-testid="group-search"]'));
+ assert(byTest("key-brave_api_key").closest('[data-testid="group-search"]'));
  assert(byTest("unknown-FUTURE_VAR").closest('[data-testid="group-provider-keys"]'));
  assert(byTest("group-unknown-keys").parentElement?.lastElementChild === byTest("group-unknown-keys"));
  assert.equal(byTest("unknown-FUTURE_VAR").textContent, "FUTURE_VAR…abcd"); assert(!byTest("unknown-FUTURE_VAR").querySelector("input, button"));
@@ -228,7 +231,7 @@ test("email-only connected selector and Manage remain responsive; account select
 test("Disconnect is the quiet red left-footer action below identity; confirmation Cancel never forgets", async () => {
  assert.deepEqual(CHATGPT_DISCONNECT_COPY, { title: "Disconnect account?", body: "This removes the saved account and its credentials from this LearnHarness server." });
  const f = fixture(connected()); await mount(); await click(button("Manage…"));
- assert.equal(byTest("chatgpt-account-actions").textContent, "Disconnect"); assert.match(byTest("chatgpt-disconnect").className, /text-red/);
+ assert.equal(byTest("chatgpt-account-actions").textContent, "Disconnect"); assert.match(byTest("chatgpt-disconnect").className, /text-error/);
  assert.equal(byTest("chatgpt-account-footer").firstElementChild, byTest("chatgpt-account-actions"));
  assert.equal(byTest("chatgpt-account-footer").lastElementChild?.lastElementChild, button("Close"));
  assert(!byTest("chatgpt-account-footer").contains(byTest("chatgpt-add-accounts")));
@@ -369,7 +372,7 @@ test("signed-out legacy accounts remain manageable/forgettable without pretendin
 test("unconfirmed provider outcome is exactly the approved concise dismissible warning, never permanent red success/navigation advice", async () => {
  const f = fixture(connected(), { disconnect: async () => { const result = { ...disconnected(), accounts: [], error: warning }; f.push(result); return result; } });
  await mount(); await click(button("Manage…")); await confirmDisconnect();
- const alert = byTest("chatgpt-revocation-warning"); assert.equal(alert.textContent, warning); assert.doesNotMatch(alert.className, /text-red/);
+ const alert = byTest("chatgpt-revocation-warning"); assert.equal(alert.textContent, warning); assert.doesNotMatch(alert.className, /text-error/);
  assert(!document.querySelector('[data-testid="chatgpt-disconnect"]')); assert(byTest("chatgpt-login"));
  await click(button("Dismiss", byTest("chatgpt-account-dialog"))); assert(!document.querySelector('[role="alert"]'));
  assert(!document.body.textContent?.includes("ChatGPT Settings"));

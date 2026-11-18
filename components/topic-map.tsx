@@ -26,19 +26,19 @@ export const STATUS_LABEL: Record<ComponentStatus, string> = {
 
 const BOX: Record<ComponentStatus, string> = {
 	held: "fill-background stroke-white",
-	due: "fill-background stroke-amber-400",
+	due: "fill-background stroke-warning",
 	taught: "fill-background stroke-white [stroke-dasharray:4_3]",
-	shaky: "fill-background stroke-amber-400 [stroke-dasharray:4_3]",
-	misconception: "fill-background stroke-red-400",
+	shaky: "fill-background stroke-warning [stroke-dasharray:4_3]",
+	misconception: "fill-background stroke-error",
 	missing: "fill-background stroke-muted-foreground [stroke-dasharray:4_3]",
 	unprobed: "fill-background stroke-border [stroke-dasharray:1_3]",
 };
 const TEXT: Record<ComponentStatus, string> = {
 	held: "fill-white text-xs",
-	due: "fill-amber-300 text-xs",
+	due: "fill-warning text-xs",
 	taught: "fill-white text-xs",
-	shaky: "fill-amber-300 text-xs",
-	misconception: "fill-red-300 text-xs",
+	shaky: "fill-warning text-xs",
+	misconception: "fill-error text-xs",
 	missing: "fill-muted-foreground text-xs",
 	unprobed: "fill-muted-foreground/60 text-xs",
 };

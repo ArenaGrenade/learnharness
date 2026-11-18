@@ -25,7 +25,7 @@ export interface ChatGPTControlBridge {
 	login(id?: string): Promise<ChatGPTStatus>;
 	/** Finish the pending sign-in with the 127.0.0.1 callback address the
 	 * browser was redirected to (it fails to load on the viewing device). */
-	complete(callbackUrl: string): Promise<ChatGPTStatus>;
+	complete?(callbackUrl: string): Promise<ChatGPTStatus>;
 	cancel(): Promise<ChatGPTStatus>;
 	select(id: string): Promise<ChatGPTStatus>;
 	/** Explicitly forget every local registration/credential for this verified identity. */

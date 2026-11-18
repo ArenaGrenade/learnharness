@@ -41,7 +41,7 @@ export function NewTopic() {
 					<p className="text-sm text-muted-foreground">Name something you want to understand. A mapping conversation will pin down your goal, lay out every concept it rests on and probe each one — down to what you already hold — so nothing underneath gets skipped. You can stop any time and continue later.</p>
 					<p className="text-sm text-muted-foreground">Or paste an <span className="text-foreground">arXiv link or id</span> to learn a paper: its citations are traced first to find where its core ideas come from, and the map is built from that.</p>
 					<Input autoFocus placeholder="e.g. Transformers, real analysis — or arxiv.org/abs/1706.03762" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} data-testid="new-topic-input" />
-					{error && <p role="alert" className="text-xs text-red-400">{error}</p>}
+					{error && <p role="alert" className="text-xs text-error">{error}</p>}
 					<Button type="submit" disabled={busy || !title.trim()} className="self-start">Start mapping</Button>
 				</form>
 			</main>

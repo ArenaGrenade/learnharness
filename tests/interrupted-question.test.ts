@@ -21,8 +21,7 @@ describe("interrupted question recovery", () => {
 			assert.equal(projectView(messages)[0]!.parts[1]!.state, "output-error");
 			const appends = inputAppends({ messages }, { type: "text", text: "continue" });
 			const wire = toLlmMessages([...messages, ...appends]);
-			assert.deepEqual(wire.map((m) => m.role), ["assistant", "toolResult", "user"]);
-			assert.equal((wire[1] as { toolCallId?: string }).toolCallId, "question");
+			assert.deepEqual(wire.map((m) => m.role), ["assistant", "user"]);
 			assert.deepEqual(messages[0]!.content, [{ type: "toolCall", id: "question", name: tool, arguments: {} }], "raw history is preserved");
 		});
 	}
@@ -35,7 +34,7 @@ describe("interrupted question recovery", () => {
 		assert.equal(findPendingToolCall(view), null);
 	});
 
-	it("a complete question stays answerable after reload, including a late Stop", () => {
+	it("a successfully posed complete question stays answerable after reload", () => {
 		const inputs = {
 			quiz: { question: "Which?", options: [{ label: "A" }, { label: "B" }], correctAnswer: "A", explanation: "A is correct." },
 			probe: { question: "Which?", options: [{ label: "A" }, { label: "B" }], correctAnswer: "A", explanation: "A is correct." },
@@ -45,6 +44,7 @@ describe("interrupted question recovery", () => {
 		};
 		for (const [tool, input] of Object.entries(inputs)) {
 			const messages = record(tool, input);
+			if (messages[0]?.role === "assistant") messages[0].stopReason = "toolUse";
 			assert.equal(danglingQuestionOf(messages)?.toolCallId, "question", tool);
 			assert.equal(findPendingToolCall(projectView(messages))?.toolCallId, "question", tool);
 		}

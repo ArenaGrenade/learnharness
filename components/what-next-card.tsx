@@ -45,7 +45,7 @@ export function WhatNextCard() {
 					</li>
 				))}
 			</ol>
-			{error && <p role="alert" className="mt-1 text-xs text-red-400">{error}</p>}
+			{error && <p role="alert" className="mt-1 text-xs text-error">{error}</p>}
 		</div>
 	);
 }

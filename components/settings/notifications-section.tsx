@@ -41,6 +41,7 @@ export function NotificationsSection() {
 		const response = await fetch("/api/push", { cache: "no-store" }).catch(() => null);
 		if (!response?.ok) return null;
 		const body = await response.json() as { publicKey: string; digestTime: string; devices: Array<{ endpoint: string; label: string }> };
+		if (typeof body.publicKey !== "string" || typeof body.digestTime !== "string" || !Array.isArray(body.devices)) return null;
 		setDigestTime(body.digestTime); setDevices(body.devices);
 		return body;
 	}, []);
@@ -106,7 +107,7 @@ export function NotificationsSection() {
 	return (
 		<div className="space-y-3 text-xs" data-testid="notifications-section">
 			<p className="text-muted-foreground">A daily digest of what is waiting across your topics (only when something is), and an alert when the ChatGPT plan limit is hit and when it resets.</p>
-			{support === "ios-not-installed" && <p className="text-amber-300" data-testid="notifications-ios-hint">On iPhone and iPad, notifications only work in the installed app: tap Share → Add to Home Screen, open LearnHarness from the home screen, then turn them on here.</p>}
+			{support === "ios-not-installed" && <p className="text-warning" data-testid="notifications-ios-hint">On iPhone and iPad, notifications only work in the installed app: tap Share → Add to Home Screen, open LearnHarness from the home screen, then turn them on here.</p>}
 			{support === "unsupported" && <p className="text-muted-foreground">This browser does not support push notifications.</p>}
 			{support === "ok" && (
 				<div className="flex items-center gap-3 text-foreground">

@@ -17,7 +17,7 @@ export const USAGE_PAGE = "https://chatgpt.com/settings/usage";
 const REFRESH_MS = 120_000;
 
 export function usageTone(percent: number): string {
-	return percent >= 95 ? "text-red-400" : percent >= 80 ? "text-amber-300" : "text-muted-foreground";
+	return percent >= 95 ? "text-error" : percent >= 80 ? "text-warning" : "text-muted-foreground";
 }
 
 export function usageTitle(windows: readonly ChatGPTUsageWindow[], planType?: string): string {

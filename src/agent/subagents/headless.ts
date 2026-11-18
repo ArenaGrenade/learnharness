@@ -1,18 +1,19 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
+import { createRequire } from "node:module";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { standardFontsDir } from "./pdf-ops";
+import { svgImageSource } from "../../../lib/svg-image-source";
 
 /**
- * Verification engines for sub-agents: demos run in the server machine's
- * system Chrome via puppeteer-core (web host, 2026-10-25 — the Electron
- * browser helper left with the desktop shell). SVGs use resvg (browser
- * fallback); PDFs use pdfjs + Skia (no browser). No Chromium is downloaded.
+ * Verification engines for sub-agents: demos use the app's own Electron
+ * browser-service via puppeteer-core, with system Chrome as fallback.
+ * SVGs use only resvg; PDFs use pdfjs + Skia (no browser).
+ * No extra Chromium is shipped or downloaded.
  *
- * Chrome resolution: CHROME_PATH first, then common macOS, Windows and
- * Linux install paths. `available()` is a cheap executable check; the
- * launch must still succeed at job time.
+ * Chrome fallback resolution: CHROME_PATH first, then common macOS,
+ * Windows and Linux install paths. `available()` is a cheap executable
+ * check; the helper must still prove it can launch/connect at job time.
  *
  * Test seam: `headlessOverride.current` replaces the whole API (tests inject
  * a fake; nothing here touches a real browser). Builders call `getHeadless()`.
@@ -40,6 +41,8 @@ export interface RunDemoOptions {
 }
 
 export interface RenderSvgOptions {
+	/** Annotation images keep strict native input: skip ordinary figure display repairs. */
+	nativeOnly?: boolean;
 	/** Viewport size — defaults to the SVG's width/height attrs, else 900×700. */
 	width?: number;
 	height?: number;
@@ -107,12 +110,171 @@ export function resolveChromeExecutablePath(): string | null {
 }
 
 const NO_CHROME_MESSAGE =
-	"No render engine available: no system Chrome/Chromium was found on the server. " +
+	"No render engine available: the app's own browser helper failed to start and no system Chrome/Chromium was found. " +
 	"Install Google Chrome or set CHROME_PATH to a Chrome executable. " +
 	"(Verification is mandatory — demos are never delivered untested.)";
 
-/** One headless Chrome per job, closed on the way out. */
+// ─── The app's own Chromium as a browser service (Wave E stage 3) ────────────
+// Demos execute JS and need a browser. PRIMARY: this very app's binary
+// spawned with --browser-service (main.cjs boots a hidden window with a CDP
+// port and prints "BROWSER_SERVICE_CDP <port>"). FALLBACK: system Chrome.
+// A Node IPC channel owns its lifetime: parent death/disconnect quits the
+// helper on every OS (Windows Electron stdin is synthetic EOF). No orphans.
+// PDFs and SVGs never come here (native now).
+
+/** Handshake line parser (pure; exported for tests). */
+export function parseBrowserServiceLine(line: string): number | null {
+	const m = line.match(/^BROWSER_SERVICE_CDP (\d+)$/);
+	if (!m) return null;
+	const port = Number(m[1]);
+	return port >= 1 && port <= 65535 ? port : null;
+}
+
+/** Spawn env sanitizer (pure; exported for tests): the helper must run as a
+ *  FULL Electron app — ELECTRON_RUN_AS_NODE must not leak — and must not
+ *  inherit the dev-shell userData redirect. */
+export function browserServiceSpawnEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	const out: Record<string, string | undefined> = { ...env };
+	delete out.ELECTRON_RUN_AS_NODE;
+	delete out.LH_DEV_URL;
+	// The artifact renderer is not an authorized app API client.
+	delete out.LH_DESKTOP_API_SECRET;
+	delete out.LH_DESKTOP_SERVER;
+	return out;
+}
+
+/** The helper binary: inside the packaged app the server runs under
+ *  ELECTRON_RUN_AS_NODE so process.execPath IS the app binary; in dev
+ *  (plain node) the electron package resolves to the dev binary path. */
+export function browserServiceBinary(): string | null {
+	if (process.versions.electron) return process.execPath;
+	try {
+		const req = createRequire(import.meta.url);
+		const p = req("electron") as unknown as string;
+		return typeof p === "string" && p.length > 0 ? p : null;
+	} catch {
+		return null;
+	}
+}
+
+const BROWSER_SERVICE_TIMEOUT_MS = 15_000;
+let browserServiceProc: import("node:child_process").ChildProcess | null = null;
+
+type ConnectedBrowserService = {
+	browser: import("puppeteer-core").Browser;
+	proc: import("node:child_process").ChildProcess;
+};
+
+async function connectBrowserService(): Promise<ConnectedBrowserService | null> {
+	const puppeteer = (await import("puppeteer-core")).default;
+	const { spawn } = await import("node:child_process");
+	let port: number | null = null;
+	let proc = browserServiceProc;
+
+	if (proc && proc.exitCode === null) {
+		// Helper alive from a previous run — reuse its endpoint.
+		port = (proc as { __cdpPort?: number }).__cdpPort ?? null;
+	}
+	if (port === null) {
+		const binary = browserServiceBinary();
+		if (!binary) return null;
+		// Packaged: execPath runs the bundled app (flag reaches main.cjs).
+		// Dev: the bare electron binary needs the repo root as the app arg —
+		// flagless it would open Electron's default app instead of our shell.
+		const appArgs = process.versions.electron ? ["--browser-service"] : [
+			// src/agent/subagents → repo root
+			path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", ".."),
+			"--browser-service",
+		];
+		proc = spawn(binary, appArgs, {
+			// Cast: the sanitizer is pure over a loose record; NODE_ENV is
+			// always present in a real process.env.
+			env: browserServiceSpawnEnv(process.env) as NodeJS.ProcessEnv,
+			stdio: ["ignore", "pipe", "pipe", "ipc"] as const,
+		});
+		browserServiceProc = proc;
+		const startingProc = proc;
+		port = await new Promise<number | null>((resolve) => {
+			let buf = "";
+			const timer = setTimeout(() => {
+				startingProc.kill();
+				resolve(null);
+			}, BROWSER_SERVICE_TIMEOUT_MS);
+			const onData = (chunk: Buffer) => {
+				buf += chunk.toString("utf8");
+				const line = buf.split("\n").find((l) => parseBrowserServiceLine(l) !== null);
+				if (line !== undefined) {
+					clearTimeout(timer);
+					resolve(parseBrowserServiceLine(line));
+				}
+			};
+			startingProc.stdout!.on("data", onData);
+			startingProc.once("exit", () => {
+				clearTimeout(timer);
+				resolve(null);
+			});
+		});
+		if (port === null) {
+			browserServiceProc = null;
+			return null;
+		}
+		(proc as { __cdpPort?: number }).__cdpPort = port;
+	}
+
+	if (!proc) return null;
+	try {
+		const version = await fetch(`http://127.0.0.1:${port}/json/version`);
+		const info = (await version.json()) as { webSocketDebuggerUrl?: string };
+		if (!info.webSocketDebuggerUrl) return null;
+		// connect ≠ launch: browser.close() below merely disconnects — the
+		// helper stays resident for the next job (IPC-owned lifetime).
+		const browser = await puppeteer.connect({
+			browserWSEndpoint: info.webSocketDebuggerUrl,
+			defaultViewport: null,
+		});
+		return { browser, proc };
+	} catch {
+		return null;
+	}
+}
+
+/** Serialize acquisition, page use and invalidation together: the helper owns
+ * ONE page target. Queued jobs must acquire after the previous job retires or
+ * discards its helper, never capture a Browser while a handshake is pending. */
+let helperPageChain: Promise<unknown> = Promise.resolve();
+
 async function withBrowserPage<T>(fn: (page: import("puppeteer-core").Page) => Promise<T>): Promise<T> {
+	// Helper first (owner ruling 2026-10-10: the app's own Chromium primary,
+	// system Chrome fallback) — deterministic across users, zero install.
+	const run = async (): Promise<{ value: T } | null> => {
+		const helper = await connectBrowserService();
+		if (!helper) return null;
+		const pages = await helper.browser.pages();
+		const page = pages.find((p) => p.target().type() === "page");
+		if (!page) throw new Error("browser service: no page target");
+		try {
+			return { value: await fn(page) };
+		} catch (error) {
+			if (error instanceof IsolatedPageCleanupError) {
+				// A failed retirement must never leave a live untrusted document
+				// on the shared target. The next job starts a fresh owned helper.
+				helper.proc.kill();
+				if (browserServiceProc === helper.proc) browserServiceProc = null;
+			}
+			throw error;
+		} finally {
+			// Drop all page state (JS heap, listeners) between jobs.
+			await page.goto("about:blank").catch(() => {});
+		}
+	};
+	const next = helperPageChain.then(run, run);
+	helperPageChain = next.catch(() => {});
+	const result = await next;
+	if (result) return result.value;
+
+	// Chrome fallback: per-job launch, close on the way out (old semantics).
 	const puppeteer = (await import("puppeteer-core")).default;
 	const executablePath = resolveChromeExecutablePath();
 	const browser = await puppeteer.launch({
@@ -120,7 +282,7 @@ async function withBrowserPage<T>(fn: (page: import("puppeteer-core").Page) => P
 		// Explicit path when we found one; otherwise let puppeteer resolve the
 		// system Chrome install itself via the "chrome" channel.
 		...(executablePath ? { executablePath } : { channel: "chrome" as const }),
-		args: ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"],
+		args: ["--disable-gpu", "--disable-dev-shm-usage"],
 	});
 	try {
 		const page = await browser.newPage();
@@ -130,35 +292,90 @@ async function withBrowserPage<T>(fn: (page: import("puppeteer-core").Page) => P
 	}
 }
 
-/** A temp dir per invocation; removed in finally. */
-function tempDir(prefix: string): string {
-	return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+// ─── Isolated page loading ───────────────────────────────────────────────────
+// Demo HTML is model output, so it is untrusted.
+// They load in memory on about:blank, which gives the document an opaque
+// origin like the learner's sandboxed iframe. A file:// document could read
+// any local file. As a second layer, requests for any other scheme (file:
+// included) are aborted while the page is loaded.
+
+const ISOLATED_PAGE_SCHEMES = new Set(["http:", "https:", "data:", "blob:", "about:"]);
+
+/** Request filter for isolated pages (pure; exported for tests). */
+export function isIsolatedPageRequestAllowed(url: string): boolean {
+	try {
+		return ISOLATED_PAGE_SCHEMES.has(new URL(url).protocol);
+	} catch {
+		return false;
+	}
+}
+
+type IsolatedPage = Pick<
+	import("puppeteer-core").Page,
+	"url" | "goto" | "setContent" | "setRequestInterception" | "on" | "off"
+>;
+
+class IsolatedPageCleanupError extends Error {}
+
+/** Load untrusted markup in memory with the request filter on. Cleanup first
+ * retires the document under that same guard, then disables interception.
+ * If retirement fails, leave the guard installed and discard the helper. */
+export async function loadIsolatedPage(page: IsolatedPage, html: string): Promise<() => Promise<void>> {
+	const onRequest = (request: import("puppeteer-core").HTTPRequest) => {
+		const decision = isIsolatedPageRequestAllowed(request.url()) ? request.continue() : request.abort("accessdenied");
+		void decision.catch(() => {});
+	};
+	let retirement: Promise<void> | undefined;
+	const cleanup = () => retirement ??= (async () => {
+		try {
+			await page.goto("about:blank", { timeout: 5_000 });
+			await page.setRequestInterception(false);
+			page.off("request", onRequest);
+		} catch (error) {
+			throw new IsolatedPageCleanupError("Could not retire the untrusted browser document", { cause: error });
+		}
+	})();
+	try {
+		page.on("request", onRequest);
+		await page.setRequestInterception(true);
+		// setContent retains the current origin; reset under the guard first.
+		if (page.url() !== "about:blank") await page.goto("about:blank", { timeout: 5_000 });
+		await page.setContent(html, { waitUntil: "load", timeout: 30_000 });
+		return cleanup;
+	} catch (err) {
+		await cleanup();
+		throw err;
+	}
 }
 
 // ─── Demo execution ──────────────────────────────────────────────────────────
 
 async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRunResult> {
-	const settleMs = opts.settleMs ?? 2000;
-	const dir = tempDir("lh-demo-");
-	const file = path.join(dir, "demo.html");
-	fs.writeFileSync(file, html, "utf-8");
+	return withBrowserPage(page => runDemoOnPage(page, html, opts));
+}
 
+/** Production execution on an owned page; the packaged gate uses this same
+ * function with its explicitly scratch-profiled helper target. */
+export async function runDemoOnPage(page: import("puppeteer-core").Page, html: string, opts: RunDemoOptions = {}): Promise<DemoRunResult> {
+	const settleMs = opts.settleMs ?? 2000;
 	const consoleErrors: string[] = [];
 	const pageErrors: string[] = [];
 	const failedRequests: string[] = [];
 	let probeResult: unknown;
 	let probed = false;
 
+	const onConsole = (msg: import("puppeteer-core").ConsoleMessage) => {
+		if (msg.type() === "error") consoleErrors.push(msg.text());
+	};
+	const onError = (err: unknown) => pageErrors.push(err instanceof Error ? err.message : String(err));
+	const onFailed = (req: import("puppeteer-core").HTTPRequest) => failedRequests.push(`${req.url()} (${req.failure()?.errorText ?? "failed"})`);
+	page.on("console", onConsole);
+	page.on("pageerror", onError);
+	page.on("requestfailed", onFailed);
 	try {
-		await withBrowserPage(async (page) => {
-		page.on("console", (msg) => {
-			if (msg.type() === "error") consoleErrors.push(msg.text());
-		});
-		page.on("pageerror", (err) => pageErrors.push(err instanceof Error ? err.message : String(err)));
-		page.on("requestfailed", (req) => failedRequests.push(`${req.url()} (${req.failure()?.errorText ?? "failed"})`));
-
+		let cleanup: (() => Promise<void>) | undefined;
 		try {
-			await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
+			cleanup = await loadIsolatedPage(page, html);
 			await new Promise((resolve) => setTimeout(resolve, settleMs));
 			if (opts.probe) {
 				try {
@@ -169,15 +386,15 @@ async function runDemo(html: string, opts: RunDemoOptions = {}): Promise<DemoRun
 				probed = true;
 			}
 		} catch (err) {
+			if (err instanceof IsolatedPageCleanupError) throw err;
 			pageErrors.push(err instanceof Error ? err.message : String(err));
+		} finally {
+			await cleanup?.();
 		}
-		});
 	} finally {
-		try {
-			fs.rmSync(dir, { recursive: true, force: true });
-		} catch {
-			/* best-effort cleanup */
-		}
+		page.off("console", onConsole);
+		page.off("pageerror", onError);
+		page.off("requestfailed", onFailed);
 	}
 
 	return {
@@ -270,53 +487,69 @@ function crc32(buf: Buffer): number {
 }
 
 async function renderSvg(svg: string, opts: RenderSvgOptions = {}): Promise<Buffer> {
-	// NATIVE FIRST (Wave E stage 2, owner 2026-10-10): resvg rasterizes
-	// static SVG in-process — visual-maker SVGs never execute script, so a
-	// browser adds nothing but a process. White background mirrors the old
-	// Chrome page (html,body{background:#fff}); fitTo width mirrors
-	// svgViewport semantics (attrs win, viewBox-only gets the 900 default,
-	// opts override). The browser path below stays as the fallback for
-	// exotic-SVG features resvg cannot parse — failures there used to be
-	// the ONLY path, so nothing regresses.
+	// Static native rasterization only. Ordinary figures get the same two
+	// render-only repairs as their display; annotation inputs remain strict.
+	// Native errors propagate to the existing visual-maker revision/failure
+	// handling, never executable browser markup or a system Chrome fallback.
 	const { width } = svgViewport(svg, opts);
-	try {
-		const { Resvg } = await import("@resvg/resvg-js");
-		const resvg = new Resvg(svg, {
-			fitTo: { mode: "width", value: width },
-			font: { loadSystemFonts: true },
-			background: "#ffffff",
-		});
-		return providerSafePng(resvg.render().asPng());
-	} catch {
-		/* fall through to the browser path */
-	}
-	const dir = tempDir("lh-visual-");
-	const file = path.join(dir, "figure.html");
-	fs.writeFileSync(
-		file,
-		`<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0;background:#fff}svg{display:block}</style></head><body>${svg}</body></html>`,
-		"utf-8",
-	);
-
-	return withBrowserPage(async (page) => {
-		const { width, height } = svgViewport(svg, opts);
-		await page.setViewport({ width, height });
-		await page.goto(pathToFileURL(file).href, { waitUntil: "load", timeout: 30_000 });
-		const shot = (await page.screenshot({ fullPage: true, type: "png" })) as Buffer;
-		// Chrome's raw split-IDAT PNG is canonicalized before it reaches a
-		// provider (see providerSafePng) — the visual-maker feeds this exact
-		// buffer back to the vision model as its only way to "look".
-		return providerSafePng(Buffer.from(shot));
-	}).finally(() => {
-		try {
-			fs.rmSync(dir, { recursive: true, force: true });
-		} catch {
-			/* best-effort cleanup */
-		}
+	const { Resvg } = await import("@resvg/resvg-js");
+	const resvg = new Resvg(opts.nativeOnly ? svg : svgImageSource(svg), {
+		fitTo: { mode: "width", value: width },
+		font: { loadSystemFonts: true },
+		background: "#ffffff",
 	});
+	return providerSafePng(resvg.render().asPng());
 }
 
 // ─── PDF page rasterization (pdfjs paints, Skia hosts) ─────────────────
+
+/** Decimal megapixels: at four bytes per pixel this is about 61 MiB per
+ *  page canvas, before pdfjs/Skia's other working memory. */
+export const MAX_PDF_CANVAS_PIXELS = 16_000_000;
+export const MAX_PDF_CANVAS_SIDE = 8192;
+
+/** Plan the allocation from the scale-1 viewport (including PDF rotation).
+ *  Keep ordinary DPI/ceil arithmetic unchanged; oversized pages lose scale,
+ *  never gain it. Exported as a pure seam so extreme geometry needs no canvas. */
+export function pdfCanvasGeometry(baseWidth: number, baseHeight: number, dpi: number): {
+	scale: number;
+	width: number;
+	height: number;
+} {
+	if (![baseWidth, baseHeight].every((n) => Number.isFinite(n) && n > 0)) {
+		throw new Error("PDF page dimensions must be finite and positive");
+	}
+	if (!Number.isFinite(dpi) || dpi <= 0 || dpi / 72 === 0) {
+		throw new Error("PDF render DPI must be finite and positive");
+	}
+	// Limit sides first, so the area calculation cannot overflow even when
+	// the unscaled page dimensions or requested DPI are enormous.
+	let scale = Math.min(dpi / 72, MAX_PDF_CANVAS_SIDE / baseWidth, MAX_PDF_CANVAS_SIDE / baseHeight);
+	const area = (baseWidth * scale) * (baseHeight * scale);
+	if (area > MAX_PDF_CANVAS_PIXELS) scale *= Math.sqrt(MAX_PDF_CANVAS_PIXELS / area);
+	const dimensions = (s: number) => ({
+		width: Math.max(1, Math.ceil(baseWidth * s)),
+		height: Math.max(1, Math.ceil(baseHeight * s)),
+	});
+	const fits = ({ width, height }: { width: number; height: number }) =>
+		width <= MAX_PDF_CANVAS_SIDE && height <= MAX_PDF_CANVAS_SIDE && width * height <= MAX_PDF_CANVAS_PIXELS;
+	// Ceil can put an otherwise bounded floating-point viewport over budget.
+	// Find a safe scale rather than clipping the viewport or allocating first.
+	if (!fits(dimensions(scale))) {
+		let low = 0;
+		let high = scale;
+		for (let i = 0; i < 64; i++) {
+			const mid = low + (high - low) / 2;
+			if (fits(dimensions(mid))) low = mid;
+			else high = mid;
+		}
+		scale = low;
+	}
+	if (scale <= 0 || baseWidth * scale === 0 || baseHeight * scale === 0) {
+		throw new Error("PDF page dimensions cannot be rendered at a positive scale");
+	}
+	return { scale, ...dimensions(scale) };
+}
 
 /** Render PDF pages to PNGs — the sources-v0 pdf-reader's eyes.
  *
@@ -332,6 +565,9 @@ async function renderPdfPages(
 	opts: RenderPdfOptions = {},
 ): Promise<RenderedPdfPage[]> {
 	const dpi = opts.dpi ?? 150;
+	if (!Number.isFinite(dpi) || dpi <= 0 || dpi / 72 === 0) {
+		throw new Error("PDF render DPI must be finite and positive");
+	}
 	// NATIVE CANVAS (Wave E, owner 2026-10-10): pdfjs paints into
 	// @napi-rs/canvas in this process — no browser involved. pdfjs-dist v6's
 	// own Node integration IS @napi-rs/canvas (its optionalDependency: the
@@ -352,8 +588,10 @@ async function renderPdfPages(
 		for (const pageNo of pages) {
 			if (pageNo < 1 || pageNo > doc.numPages) continue;
 			const pg = await doc.getPage(pageNo);
-			const vp = pg.getViewport({ scale: dpi / 72 });
-			const canvas = createCanvas(Math.ceil(vp.width), Math.ceil(vp.height));
+			const base = pg.getViewport({ scale: 1 });
+			const geometry = pdfCanvasGeometry(base.width, base.height, dpi);
+			const vp = pg.getViewport({ scale: geometry.scale });
+			const canvas = createCanvas(geometry.width, geometry.height);
 			const ctx = canvas.getContext("2d");
 			// pdfjs's render types speak the DOM context; @napi-rs/canvas's
 			// context is the same 2D API implemented over Skia.
@@ -379,10 +617,12 @@ async function renderPdfPages(
 
 export const realHeadless: HeadlessApi = {
 	available() {
-		return resolveChromeExecutablePath() !== null;
+		// The helper binary exists by construction in the packaged app; in dev
+		// it resolves via the electron package. System Chrome widens coverage.
+		return browserServiceBinary() !== null || resolveChromeExecutablePath() !== null;
 	},
 	unavailableReason() {
-		return resolveChromeExecutablePath() === null ? NO_CHROME_MESSAGE : null;
+		return browserServiceBinary() === null && resolveChromeExecutablePath() === null ? NO_CHROME_MESSAGE : null;
 	},
 	runDemo,
 	renderSvg,

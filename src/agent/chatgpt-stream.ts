@@ -4,6 +4,7 @@ import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-s
 import { transformMessages } from "@earendil-works/pi-ai/api/transform-messages";
 import { chatGPTAbortController, chatGPTScope, chatGPTScopeCurrent, chatGPTLease, chatGPTDenial, reportChatGPTLimit } from "./chatgpt-bridge.ts";
 import type { AdmissionScope, ChatGPTDispatchLifecycle } from "./chatgpt-request-cycle.ts";
+import { capturePreparedBackgroundPayload } from "./background-capture.ts";
 
 const USAGE = "https://chatgpt.com/settings/usage";
 /** The plan's usage limit, as the stream surfaces it (the documented code,
@@ -102,6 +103,7 @@ export function chatGPTStream(background: () => boolean, lifecycle?: ChatGPTDisp
 						const replacement = await options?.onPayload?.(raw, model);
 						const payload = chatGPTPayload(replacement === undefined ? raw : replacement, logicalModel.id);
 						check();
+						capturePreparedBackgroundPayload(payload, logicalModel);
 						return payload;
 					},
 					onProviderStreamEvent: async (raw, model) => {

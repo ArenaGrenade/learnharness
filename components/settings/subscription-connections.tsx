@@ -8,10 +8,12 @@ import { ChatGPTConnection } from "./chatgpt-connection";
 import { Toggle } from "./controls";
 import { connectionBridges } from "@/components/connection-bridges";
 
+function subscriptionControls() { return typeof window !== "undefined" && window.lh?.subscriptionTransport !== "web" && window.lh?.subscriptions ? window.lh.subscriptions : connectionBridges.subscriptions; }
+
 export const COPILOT_POLICY_NOTICE = "Pi's native Copilot sign-in may enable additional models whose policy is not yet configured. Models explicitly disabled by policy are not enabled. Organization restrictions still apply.";
 export const SUBSCRIPTION_BACKGROUND_HINT = "Allow LearnHarness helper agents and automatic follow-ups to use this connection.";
-export function subscriptionNotice(label: string): string { return `Your prompts, tool results, and relevant session context are sent to ${label} to run the work you select. Credentials are stored in an owner-only plaintext file on the computer running this LearnHarness server. Provider terms, data-use policies, and plan limits apply. This connection never falls back to an API key.`; }
-export function subscriptionDisconnectCopy(label: string): string { return `Disconnect ${label} from LearnHarness? This stops work using this connection and removes its saved credentials from this LearnHarness server. It does not cancel your subscription or revoke access at the provider. Saved model choices will remain unavailable until you reconnect or change them.`; }
+export function subscriptionNotice(label: string, _web = false): string { return `Your prompts, tool results, and relevant session context are sent to ${label} to run the work you select. Credentials are stored in an owner-only plaintext file on the computer running this LearnHarness server. Provider terms, data-use policies, and plan limits apply. This connection never falls back to an API key.`; }
+export function subscriptionDisconnectCopy(label: string, _web = false): string { return `Disconnect ${label} from LearnHarness? This stops work using this connection and removes its saved credentials from this LearnHarness server. It does not cancel your subscription or revoke access at the provider. Saved model choices will remain unavailable until you reconnect or change them.`; }
 export function emptySubscriptionStatus(providerId: NativeSubscriptionProviderId): NativeSubscriptionStatus { return { providerId, available: false, connected: false, pending: false, allowBackgroundUse: true, connectionId: null, epoch: 0, authorityRevision: 0, revision: 0 }; }
 const Context = createContext({ statuses: [] as NativeSubscriptionStatus[], busy: false, open: (_providerId: NativeSubscriptionProviderId) => {} });
 const CONTROL_ERROR = "The connection could not be changed. Try again.";
@@ -31,7 +33,7 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 	async function refresh() {
 		const request = ++sequence.current;
 		try {
-			const values = await connectionBridges.subscriptions.status();
+			const values = await subscriptionControls().status();
 			if (!mounted.current || request !== sequence.current || !Array.isArray(values)) return;
 			const accepted = NATIVE_SUBSCRIPTIONS.map(({ providerId }) => {
 				const next = values.find((s) => s.providerId === providerId), old = statusesRef.current.find((s) => s.providerId === providerId);
@@ -42,7 +44,7 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 	}
 	useEffect(() => {
 		mounted.current = true; void refresh();
-		const off = connectionBridges.subscriptions.onChange(() => { void refresh(); notifySettingsSaved("keys"); });
+		const off = subscriptionControls().onChange(() => { void refresh(); notifySettingsSaved("keys"); });
 		return () => { mounted.current = false; generation.current++; off?.(); };
 		// The root-lifetime subscriber reads current state through refs.
 	}, []);
@@ -60,32 +62,32 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 		catch { if (mounted.current && owner === generation.current) setError(CONTROL_ERROR); }
 		finally { if (mounted.current && owner === generation.current) setOperation(null); }
 	}
-	function close() {
-		if (!dialog || busy) return;
-		if (confirm) { setConfirm(false); setError(null); return; }
-		const bridge = connectionBridges.subscriptions;
-		if (status?.pending || operation === "login") { void control(() => bridge.cancel(dialog), true); return; }
-		generation.current++; setDialog(null); setError(null);
+	function close(): import("../interaction-layers").CloseOutcome {
+		if (!dialog || busy) return "blocked";
+		if (confirm) { setConfirm(false); setError(null); return "handled-without-close"; }
+		const bridge = subscriptionControls();
+		if (status?.pending || operation === "login") { void control(() => bridge.cancel(dialog), true); return "pending"; }
+		generation.current++; setDialog(null); setError(null); return "closed";
 	}
 	function beginSignIn() {
 		if (operation || busy || !status) return;
 		generation.current++; setError(null); setConfirm(false); setBackground(status.allowBackgroundUse); setBackgroundDirty(false); setView("notice");
 	}
 	async function login() {
-		const bridge = connectionBridges.subscriptions;
+		const bridge = subscriptionControls();
 		if (!dialog || operation || !status?.available) return;
 		const owner = ++generation.current; setOperation("login"); setError(null);
 		try { await bridge.login(dialog, backgroundDirty ? background : undefined); await refresh(); if (mounted.current && generation.current === owner) setDialog(null); }
 		catch { if (mounted.current && generation.current === owner) setError("Sign-in did not complete. Try connecting again."); }
 		finally { if (mounted.current && generation.current === owner) setOperation(null); }
 	}
-	const bridge = connectionBridges.subscriptions;
+	const bridge = subscriptionControls();
 	return <Context.Provider value={{ statuses, busy: !!operation, open }}>
 		{children}
 		{dialog && descriptor && status && <ConnectionDialog key={`${dialog}:${view}:${confirm}`} label={`${descriptor.label} connection`} testid="subscription-connection-dialog" backdropTestid="subscription-dialog-backdrop" busy={busy} onClose={close}>
 			<h2 className="text-sm font-semibold text-foreground">{descriptor.label}</h2>
 			{confirm ? <>
-				<p className="mt-3 text-sm font-semibold text-red-400">Disconnect {descriptor.label}?</p>
+				<p className="mt-3 text-sm font-semibold text-error">Disconnect {descriptor.label}?</p>
 				<p className="mt-3 text-xs leading-relaxed text-muted-foreground">{subscriptionDisconnectCopy(descriptor.label)}</p>
 			</> : view === "notice" ? <>
 				<p className="mt-3 text-xs leading-relaxed text-muted-foreground" data-testid="subscription-privacy-notice">{subscriptionNotice(descriptor.label)}</p>
@@ -107,8 +109,8 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 					</form>}
 				</div>}
 			</>}
-			{(error || status.error) && <p role="alert" className="mt-3 text-xs text-red-400">{error || status.error}</p>}
-			<ConnectionFooter testid="subscription-connection-footer" leading={!confirm && management && status.connectionId && !status.pending && <Button variant="ghost" size="sm" className="cursor-pointer text-red-400 hover:bg-red-500/10 hover:text-red-300" disabled={busy || !!operation} onClick={() => setConfirm(true)}>Disconnect</Button>}>
+			{(error || status.error) && <p role="alert" className="mt-3 text-xs text-error">{error || status.error}</p>}
+			<ConnectionFooter testid="subscription-connection-footer" leading={!confirm && management && status.connectionId && !status.pending && <Button variant="ghost" size="sm" className="cursor-pointer text-error hover:bg-error/10 hover:text-error" disabled={busy || !!operation} onClick={() => setConfirm(true)}>Disconnect</Button>}>
 				{!confirm && management && status.connectionId && status.available && !status.connected && !!status.error && !status.pending && <>
 					{status.error && <Button variant="outline" size="sm" disabled={busy || !!operation} onClick={() => void control(() => bridge.retry(dialog))}>Retry</Button>}
 					<Button variant="outline" size="sm" disabled={!status.available || busy || !!operation} onClick={beginSignIn}>Sign in again</Button>
@@ -120,16 +122,16 @@ export function NativeSubscriptionUIProvider({ children }: { children: React.Rea
 	</Context.Provider>;
 }
 
-export function NativeSubscriptionConnection({ providerId }: { providerId: NativeSubscriptionProviderId }) {
+export function NativeSubscriptionConnection({ providerId, setup = false }: { providerId: NativeSubscriptionProviderId; setup?: boolean }) {
 	const ui = useContext(Context), descriptor = NATIVE_SUBSCRIPTIONS.find((p) => p.providerId === providerId)!;
 	const status = ui.statuses.find((s) => s.providerId === providerId) ?? emptySubscriptionStatus(providerId);
 	return <div className="flex flex-col gap-2" data-testid={`${providerId}-connection`}>
-		<ConnectionRow label={descriptor.label} action={status.connectionId ? "Manage…" : "Connect"} disabled={ui.busy || !status.available || ui.statuses.some((s) => s.pending)} onAction={() => ui.open(providerId)} />
-		{status.error && <p role="alert" className="text-xs text-red-400">{status.error}</p>}
+		<ConnectionRow labelClassName={setup ? undefined : "font-prose text-(length:--lh-prose-size) text-foreground"} label={descriptor.label} action={status.connectionId ? "Manage…" : "Connect"} disabled={ui.busy || !status.available || ui.statuses.some((s) => s.pending)} onAction={() => ui.open(providerId)} />
+		{status.error && <p role="alert" className="text-xs text-error">{status.error}</p>}
 	</div>;
 }
 export function SubscriptionConnections({ setup = false }: { setup?: boolean }) {
-	return <div className="space-y-3" data-testid="subscription-connections"><ChatGPTConnection setup={setup} />{NATIVE_SUBSCRIPTIONS.map((p) => <NativeSubscriptionConnection key={p.providerId} providerId={p.providerId} />)}</div>;
+	return <div className="space-y-3" data-testid="subscription-connections"><ChatGPTConnection setup={setup} />{NATIVE_SUBSCRIPTIONS.map((p) => <NativeSubscriptionConnection key={p.providerId} providerId={p.providerId} setup={setup} />)}</div>;
 }
 export function NativeSubscriptionBackgroundAccess({ provider }: { provider: string | undefined }) {
 	const ui = useContext(Context), descriptor = NATIVE_SUBSCRIPTIONS.find((p) => p.logicalId === provider);

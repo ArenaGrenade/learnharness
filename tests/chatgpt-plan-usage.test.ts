@@ -85,8 +85,8 @@ describe("planUsage", () => {
 describe("meter presentation", () => {
 	it("tones by how close to the limit, and explains in the title", () => {
 		assert.equal(usageTone(40), "text-muted-foreground");
-		assert.equal(usageTone(85), "text-amber-300");
-		assert.equal(usageTone(97), "text-red-400");
+		assert.equal(usageTone(85), "text-warning");
+		assert.equal(usageTone(97), "text-error");
 		assert.match(usageTitle([{ label: "5h", usedPercent: 34.4 }], "plus"), /^ChatGPT plus plan usage\n5h: 34% used\nOpen ChatGPT usage settings$/);
 	});
 });

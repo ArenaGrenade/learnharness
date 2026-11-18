@@ -1,0 +1,6 @@
+[
+  { "id": "python", "label": "Python", "aliases": ["py", "python3"], "probe": ["python3", "--version"] },
+  { "id": "cuda", "label": "CUDA", "aliases": ["cu"], "probe": ["nvcc", "--version"], "gpu": true },
+  { "id": "cpp", "label": "C++", "aliases": ["c++", "cplusplus"], "probe": ["g++", "--version"] },
+  { "id": "rust", "label": "Rust", "aliases": ["rs"], "probe": ["rustc", "--version"] }
+]

@@ -164,6 +164,6 @@ describe("the mapper's prompts in settings", () => {
 		const sections = sectionedSegments({ teacher: [seg("teacher/a.md"), seg("system-prompt.md", true)], prober: [seg("prober/a.md"), seg("system-prompt.md", true)], mapper: [seg("mapper/10-mapping-doctrine.md"), seg("system-prompt.md", true)] });
 		assert.deepEqual(sections.map((s) => s.id), ["teacher", "prober", "mapper", "shared"]);
 		assert.deepEqual(sections[2]!.segments.map((s) => s.path), ["mapper/10-mapping-doctrine.md"]);
-		assert.equal(sections[3]!.hint, "Used by the teacher, prober and topic mapper");
+		assert.equal(sections[3]!.segments[0]!.usageHint, "Used by Teacher, Prober and Topic mapper");
 	});
 });

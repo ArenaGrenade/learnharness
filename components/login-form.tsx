@@ -26,7 +26,7 @@ export function LoginForm({ next, configured }: { next: string; configured: bool
 			{configured ? <>
 				<label htmlFor="lh-passphrase" className="text-xs text-muted-foreground">Passphrase</label>
 				<Input id="lh-passphrase" type="password" autoComplete="current-password" autoFocus value={passphrase} onChange={(event) => setPassphrase(event.target.value)} />
-				{error && <p role="alert" className="text-xs text-red-400">{error}</p>}
+				{error && <p role="alert" className="text-xs text-error">{error}</p>}
 				<Button type="submit" disabled={busy || !passphrase}>Sign in</Button>
 			</> : <p className="text-sm text-muted-foreground" data-testid="login-unconfigured">
 				No passphrase is set yet. On the computer running LearnHarness, run <code className="font-mono text-foreground">npm run set-passphrase</code>, then reload this page.

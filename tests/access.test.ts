@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
+process.env.LH_ALLOWED_HOSTS = "lh.example.com";
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "lh-access-"));
 process.env.LH_DATA_DIR = path.join(scratch, "data");
 const { ACCESS_FILE, issueSession, loginThrottle, readAccess, sameOriginRequest, sessionValid, verifyPassphrase, writePassphrase, SESSION_COOKIE, SESSION_MAX_AGE_S } = await import("../src/server/access.ts");

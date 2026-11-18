@@ -102,7 +102,7 @@ export function TopicView({ initial, initialLinks = {} }: { initial: TopicRecord
 					) : null}
 					{topic.components.length > 0 && (
 						<p className="mt-4 text-xs text-muted-foreground" data-testid="topic-legend">
-							Solid = held · dashed = not held yet · dotted = not probed · <span className="text-amber-300">amber</span> = shaky or check-up due · <span className="text-red-300">red</span> = misconception
+							Solid = held · dashed = not held yet · dotted = not probed · <span className="text-warning">amber</span> = shaky or check-up due · <span className="text-error">red</span> = misconception
 						</p>
 					)}
 				</main>
@@ -150,18 +150,18 @@ export function TopicView({ initial, initialLinks = {} }: { initial: TopicRecord
 							<button type="button" className="mt-3 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={() => void run({ kind: "map" })}>Open the mapping conversation</button>
 						)}
 					</section>
-					{error && <p role="alert" className="mt-3 text-xs text-red-400">{error}</p>}
+					{error && <p role="alert" className="mt-3 text-xs text-error">{error}</p>}
 					<div className="mt-8 border-t border-border pt-3">
 						{confirmDelete ? (
 							<div className="space-y-2 text-xs">
-								<p className="text-red-400">Delete this topic, its map and its mapping/check-up conversations? Teaching sessions started from it stay.</p>
+								<p className="text-error">Delete this topic, its map and its mapping/check-up conversations? Teaching sessions started from it stay.</p>
 								<div className="flex gap-2">
 									<Button variant="ghost" size="xs" onClick={() => setConfirmDelete(false)} disabled={busy}>Cancel</Button>
 									<Button variant="destructive" size="xs" onClick={() => void remove()} disabled={busy} data-testid="topic-confirm-delete">Delete topic</Button>
 								</div>
 							</div>
 						) : (
-							<button type="button" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-red-400" onClick={() => setConfirmDelete(true)}><Trash2Icon className="size-3" />Delete topic…</button>
+							<button type="button" className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-error" onClick={() => setConfirmDelete(true)}><Trash2Icon className="size-3" />Delete topic…</button>
 						)}
 					</div>
 				</aside>
@@ -214,7 +214,7 @@ function PaperPanel({ topic, busy, onStart }: { topic: TopicRecord; busy: boolea
 			{source.status === "tracing" && <p className="text-muted-foreground" data-testid="topic-paper-tracing">Tracing citations to the core ideas… <span className="font-mono text-xs">{source.progress}</span></p>}
 			{source.status === "error" && (
 				<div className="space-y-2">
-					<p className="text-red-400">{source.error}</p>
+					<p className="text-error">{source.error}</p>
 					<Button variant="outline" size="xs" disabled={retrying} onClick={() => void retry()}>Retry the trace</Button>
 				</div>
 			)}

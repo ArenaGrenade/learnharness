@@ -41,7 +41,7 @@ export function ChatGPTLimitBanner() {
 	const line = limitedUntil ? limitLine(limitedUntil) : null;
 	if (!line || dismissed === limitedUntil) return null;
 	return (
-		<div role="status" data-testid="chatgpt-limit-banner" className="fixed left-1/2 top-2 z-40 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-2 rounded-full border border-amber-400/50 bg-card/95 px-3 py-1 text-xs text-amber-200 shadow-lg backdrop-blur">
+		<div role="status" data-testid="chatgpt-limit-banner" className="fixed left-1/2 top-2 z-40 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 items-center gap-2 rounded-full border border-warning/50 bg-card/95 px-3 py-1 text-xs text-warning shadow-lg backdrop-blur">
 			<span className="truncate">{line}</span>
 			<a href={USAGE_PAGE} target="_blank" rel="noreferrer" className="shrink-0 underline underline-offset-2 hover:text-foreground">usage ↗</a>
 			<button type="button" aria-label="Dismiss" onClick={() => setDismissed(limitedUntil!)} className="shrink-0 text-muted-foreground hover:text-foreground"><XIcon className="size-3" /></button>

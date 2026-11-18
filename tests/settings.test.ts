@@ -20,14 +20,17 @@ import {
 describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 	it("pins the owner-decided defaults", () => {
 		assert.equal(CURRENT_SETTINGS_VERSION, 1);
+		assert.deepEqual(FACTORY_SETTINGS.general, { autoUpdate: true });
+		assert.deepEqual(FACTORY_SETTINGS.agent, { workerRequestConcurrency: 8 });
 		// wave 7 collapse: the master switch ONLY + the extraction-UX
 		// redesign's chunk budget (2026-09-24); doubled to 8192 with the
 		// digest-aware redesign (2026-09-30), then HALVED BACK to 4096
 		// with the message anchors (owner, 2026-10-13)
 		assert.deepEqual(FACTORY_SETTINGS.graph, { enabled: true, rendering: true, extractionChunkTokens: 4096 });
 		const a = FACTORY_SETTINGS.appearance;
-		assert.equal(a.mode, "dark");
-		assert.equal(a.background, null); // the mode's own default, not a factory hex
+		assert.equal(a.theme, "default");
+		assert.equal(a.background, null); // the theme's own background, not a factory hex
+		assert.deepEqual(a.colors, {});
 		assert.equal(a.fontFamily, null); // Source Sans 3
 		assert.equal(a.proseFontSize, 16);
 		assert.equal(a.sessionNameSerif, true);
@@ -38,7 +41,7 @@ describe("FACTORY_SETTINGS (the compiled factory layer)", () => {
 
 	it("has NO factory model pin — chat defaults and role overrides start absent", () => {
 		assert.equal("chat" in FACTORY_SETTINGS, false);
-		assert.equal("agent" in FACTORY_SETTINGS, false);
+		assert.equal("models" in FACTORY_SETTINGS.agent, false);
 	});
 });
 
@@ -52,9 +55,21 @@ describe("isHexColor", () => {
 });
 
 describe("sanitizeUserSettings", () => {
+	it("worker concurrency keeps positive safe integers and drops invalid values without clamping", () => {
+		for (const value of [1, 8, 100_000, Number.MAX_SAFE_INTEGER]) {
+			const out = sanitizeUserSettings({ version: 1, agent: { workerRequestConcurrency: value, tools: { research: false } } });
+			assert.deepEqual(out?.agent, { workerRequestConcurrency: value, tools: { research: false } });
+		}
+		for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, NaN, Infinity, -Infinity, "8", "", null, true, [], {}]) {
+			const out = sanitizeUserSettings({ version: 1, agent: { workerRequestConcurrency: value, tools: { research: false } } });
+			assert.deepEqual(out?.agent, { tools: { research: false } }, String(value));
+		}
+	});
+
 	it("round-trips a fully valid record field-for-field", () => {
 		const record = {
 			version: 1,
+			general: { autoUpdate: false },
 			agent: {
 				models: {
 					researcher: { model: { provider: "openrouter", id: "qwen/qwen3.8-flash" }, thinkingLevel: "high" },
@@ -69,7 +84,7 @@ describe("sanitizeUserSettings", () => {
 				cheap: { thinkingLevel: "medium" },
 			},
 			appearance: {
-				mode: "light",
+				theme: "catppuccin-latte",
 				background: "#ffffff",
 				fontFamily: "Some Font",
 				proseFontSize: 18,
@@ -89,20 +104,21 @@ describe("sanitizeUserSettings", () => {
 
 	it("absent version defaults to CURRENT; unknown keys ride along VERBATIM", () => {
 		const out = sanitizeUserSettings({ futureSection: { knob: 3 }, general: { autoUpdate: true } });
-		// "general" (the retired desktop auto-update) is now an unknown key too.
 		assert.ok(out);
 		assert.equal(out.version, CURRENT_SETTINGS_VERSION);
 		assert.deepEqual((out as Record<string, unknown>).futureSection, { knob: 3 });
-		assert.deepEqual((out as Record<string, unknown>).general, { autoUpdate: true });
+		assert.deepEqual(out.general, { autoUpdate: true });
 	});
 
 	it("wrong-typed fields DROP (resolve to factory), never crash", () => {
 		const out = sanitizeUserSettings({
+			general: { autoUpdate: "yes" },
 			agent: { tools: { research: "no" }, prompts: { "system-prompt.md": 1 }, models: { researcher: "fast" } },
-			appearance: { mode: "sepia", sessionNameSerif: "true" },
+			appearance: { theme: "Sepia!", sessionNameSerif: "true" },
 			graph: { enabled: 0 },
 		});
 		assert.ok(out);
+		assert.deepEqual(out.general, {});
 		assert.deepEqual(out.agent, {});
 		assert.deepEqual(out.appearance, {});
 		assert.deepEqual(out.graph, {});
@@ -146,6 +162,25 @@ describe("sanitizeUserSettings", () => {
 		assert.equal(out.appearance?.mdRendering?.italicColor, null);
 	});
 
+	it("appearance: theme id and color overrides survive; junk drops", () => {
+		const out = sanitizeUserSettings({
+			appearance: { theme: "catppuccin-mocha", colors: { warning: "#fab387", surface: null, sepia: "#000" } },
+		});
+		assert.ok(out);
+		assert.equal(out.appearance?.theme, "catppuccin-mocha");
+		assert.deepEqual(out.appearance?.colors, { warning: "#fab387", surface: null });
+		const junk = sanitizeUserSettings({ appearance: { theme: "Not A Slug!", colors: { error: "red" } } });
+		assert.ok(junk);
+		assert.equal(junk.appearance?.theme, undefined);
+		assert.deepEqual(junk.appearance?.colors, { error: null });
+	});
+
+	it("appearance: the light-mode wave's mode/lightBackground are no longer read", () => {
+		const out = sanitizeUserSettings({ appearance: { mode: "light", lightBackground: "#eeeeee", background: "#101010" } });
+		assert.ok(out);
+		assert.deepEqual(out.appearance, { background: "#101010" });
+	});
+
 	it("empty strings/whitespace fontFamily → null (Source Sans 3); wrong-type → null too (the default)", () => {
 		for (const bad of ["", "   ", 12, { name: "x" }]) {
 			const out = sanitizeUserSettings({ appearance: { fontFamily: bad } });
@@ -176,6 +211,12 @@ describe("sanitizeUserSettings", () => {
 	it("search engine pin survives; unknown engine ids drop (auto-detect resumes) — search wave, 2026-09-20", () => {
 		const good = sanitizeUserSettings({ version: 1, agent: { search: { engine: "tavily" } } });
 		assert.deepEqual(good?.agent?.search, { engine: "tavily" });
+		const exa = sanitizeUserSettings({ version: 1, agent: { search: { engine: "exa" } } });
+		assert.deepEqual(exa?.agent?.search, { engine: "exa" });
+		const fc = sanitizeUserSettings({ version: 1, agent: { search: { engine: "firecrawl" } } });
+		assert.deepEqual(fc?.agent?.search, { engine: "firecrawl" });
+		const ollama = sanitizeUserSettings({ version: 1, agent: { search: { engine: "ollama" } } });
+		assert.deepEqual(ollama?.agent?.search, { engine: "ollama" });
 		const bad = sanitizeUserSettings({ version: 1, agent: { search: { engine: "google" } } });
 		assert.equal(bad?.agent?.search, undefined);
 		const notObject = sanitizeUserSettings({ version: 1, agent: { search: "tavily" } });
@@ -201,13 +242,14 @@ describe("sanitizeUserSettings", () => {
 		assert.deepEqual(out.agent?.tools, { quiz: false, demo: true });
 	});
 
-	it("BACKGROUND_MODEL_ROLES matches the five background roles (practice trio deleted 2026-10-04)", () => {
+	it("BACKGROUND_MODEL_ROLES matches the six override roles (practice trio deleted 2026-10-04, sideQuestion added)", () => {
 		assert.deepEqual([...BACKGROUND_MODEL_ROLES], [
 			"researcher",
 			"demoBuilder",
 			"visualMaker",
 			"extractor",
 			"auditor",
+			"sideQuestion",
 		]);
 	});
 });

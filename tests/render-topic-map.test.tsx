@@ -22,7 +22,7 @@ describe("TopicMap", () => {
 		assert.match(html, /data-testid="topic-node-c_b" data-status="misconception"/);
 		assert.match(html, /aria-label="Softmax: Not probed"/);
 		assert.equal((html.match(/marker-end="url\(#topic-arrow\)"/g) ?? []).length, 2);
-		assert.match(html, /stroke-red-400/);
+		assert.match(html, /stroke-error/);
 		assert.match(html, /stroke-width="2"/, "the selected node is emphasized");
 	});
 });

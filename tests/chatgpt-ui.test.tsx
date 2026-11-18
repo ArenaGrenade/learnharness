@@ -1,3 +1,5 @@
+import { installModalDom } from "./modal-dom.ts";
+import { InteractionLayersProvider } from "../components/interaction-layers.tsx";
 import React, { act } from "react";
 (globalThis as Record<string, unknown>).React = React;
 import assert from "node:assert/strict";
@@ -19,6 +21,7 @@ const dom = parseHTML("<html><body></body></html>");
 Object.assign(globalThis, { window: dom.window, document: dom.document, Element: dom.window.Element, HTMLElement: dom.window.HTMLElement, CustomEvent: dom.window.CustomEvent, Event: dom.window.Event, IS_REACT_ACT_ENVIRONMENT: true, localStorage: { getItem: () => null, setItem() {} } });
 // linkedom has no media queries; the sidebar asks whether it is a phone.
 Object.assign(dom.window, { matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
+installModalDom(dom);
 const originalFetch = globalThis.fetch;
 let root: Root | undefined, host: HTMLDivElement | undefined;
 function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>((done) => { resolve = done; }); return { promise, resolve }; }
@@ -31,7 +34,7 @@ function Reader({ id }: { id: string }) {
  snapshots[id] = { catalog, zero: useZeroKeys(), strong: useStrongKeyless() };
  return <span data-testid={id}>{catalog ? [...catalogLimits(catalog).keys()].join(",") : "unavailable"}</span>;
 }
-async function mount(children: React.ReactNode) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); await act(async () => root!.render(children)); }
+async function mount(children: React.ReactNode) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); await act(async () => root!.render(<InteractionLayersProvider>{children}</InteractionLayersProvider>)); }
 afterEach(async () => { await act(async () => root?.unmount()); host?.remove(); root = undefined; host = undefined; globalThis.fetch = originalFetch; connectionBridges.chatgpt = httpChatGPTBridge; snapshots = {}; });
 
 test("shared ChatGPT-only readiness admits without API keys; connection invalidation clears every reader and fences old success/error", async () => {

@@ -5,8 +5,11 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
-import type { ChatDeleteMode } from "@/src/core";
-import { DumbbellIcon, LogOutIcon, MapIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
+import { announceConnectionsChanged } from "./connection-bridges";
+import { TopicsSection } from "./topics-section";
+import { ChatGPTLimitBanner } from "./chatgpt-limit-banner";
+import type { ChatDeleteMode, ThemeMode } from "@/src/core";
+import { DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { ActivitySection } from "@/components/activity-dock";
 import { CoverageMenuBlock } from "@/components/extraction-coverage";
 import { LhMark } from "@/components/lh-mark";
@@ -22,32 +25,81 @@ import { useServerEvent, useServerResync } from "@/components/server-events";
 import type { ChatListItem } from "@/src/core";
 import { kbdEventForAction } from "@/src/core";
 import { notifySettingsSaved } from "@/components/settings-signal";
-import { announceConnectionsChanged } from "@/components/connection-bridges";
-import { TopicsSection } from "@/components/topics-section";
-import { ChatGPTLimitBanner } from "@/components/chatgpt-limit-banner";
+import { PluginWidgets } from "@/components/plugins";
+import { PluginSidebarActions } from "@/components/plugin-chrome";
+import { HostContentRootContext, HostRouteLifetimeProvider } from "@/components/host-content-root";
+import { isInteractionScopeEligible } from "@/components/plugin-input-focus";
+import { InteractionLayersProvider, useInteractionLayers, useOptionalInteractionLayers } from "@/components/interaction-layers";
 
 /**
  * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
  * sits inline next to the content and can stay open while working in a
  * session. Open state persists across pages (provider lives in the root
  * layout) and across reloads (localStorage).
- *
- * PHONES (web host, 2026-10-26): below NARROW_QUERY the sidebar is a DRAWER
- * instead — fixed over the content with a dim backdrop, closed on load,
- * closed by a backdrop tap, Esc-free (the close button and backdrop are
- * the exits) and after every navigation. Its open state is per-visit and
- * never persisted, so a phone never inherits the desktop preference.
  */
 
 const STORAGE_KEY = "lh:sidebar-open";
-/** Below this width the inline sidebar would crush the content. */
-const NARROW_QUERY = "(max-width: 767px)";
 
-const SidebarContext = createContext<{ open: boolean; narrow: boolean; toggle: () => void; close: () => void }>({
+/*
+ * Narrow-window behavior (owner, 2026-09-17): below SIDEBAR_AUTOCLOSE the
+ * sidebar would squeeze the page below the 640px window floor (the two
+ * numbers compose: 640 + 288 sidebar = 928), so it auto-closes — and
+ * auto-RESTORES when the window widens again (owner choice: the sidebar
+ * pops back, not a manual re-open). The whole behavior is one expression:
+ * rendered = pref && !narrow, where pref is the persisted user choice.
+ * Manual closes persist and stay closed; auto-close does not touch the
+ * preference. Opening the sidebar while narrow asks the Electron shell to
+ * widen the window to the threshold (window.lh.expandWindow, IPC in
+ * electron/main.cjs) — the resize listener flips `narrow` and the sidebar
+ * appears. In the plain browser there is no window to widen and no
+ * suppression — a narrow tab opens the sidebar if the user says so.
+ *
+ * Mirrors SIDEBAR_AUTOCLOSE in electron/main.cjs — keep in sync.
+ */
+import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/src/core";
+import type { UpdateState } from "@/components/settings/update-settings.tsx";
+import { FilePathDropZone } from "@/components/file-path-drop-zone";
+const SIDEBAR_AUTOCLOSE = 928;
+
+// Module scope, guarded for SSR (the server has no navigator).
+const IS_ELECTRON = typeof navigator !== "undefined" && navigator.userAgent.includes("Electron");
+
+declare global {
+	interface Window {
+		/** Preload bridge (electron/preload.cjs) — Electron only, absent in the browser. */
+		lh?: {
+			/** Read-only host OS; determines the native-control gutter. */
+			platform?: string;
+			/** Resolve an OS-backed File without copying/uploading its contents. */
+			getPathForFile?: (file: File) => string;
+			/** Choose one original directory path, without reading its contents. */
+			chooseAttachmentFolder?: () => Promise<string | null>;
+			/** External Next desktop-dev uses the server's web connections. */
+			subscriptionTransport?: "desktop" | "web";
+			openSubscriptionBrowser?: (action: string) => Promise<void>;
+			chatgpt?: ChatGPTControlBridge;
+			subscriptions?: NativeSubscriptionControlBridge;
+			expandWindow: () => void;
+			/** Native chrome follows the active theme (theme wave): main sets
+			 *  themeSource and repaints the window background / overlay. */
+			setAppearance?: (a: { mode: ThemeMode; background: string }) => void;
+			/** The zoom truth (owner round 7): subscribes to "lh:zoom" pushes; returns unsubscribe. */
+			onZoom?: (cb: (factor: number) => void) => () => void;
+			getZoom?: () => Promise<number>;
+			/** Observational update events and a snapshot for late subscribers. */
+			onUpdateStatus?: (cb: (status: UpdateState) => void) => () => void;
+			getUpdateState?: () => Promise<UpdateState>;
+			/** Explicit manual check also downloads and stages available updates. */
+			checkForUpdates?: () => Promise<void>;
+			installUpdate?: () => void;
+			onOpenSettings?: (cb: (section: string) => void) => () => void;
+		};
+	}
+}
+
+const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
 	open: false,
-	narrow: false,
 	toggle: () => {},
-	close: () => {},
 });
 
 export function useSidebar() {
@@ -55,46 +107,79 @@ export function useSidebar() {
 }
 
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
-	// Root-lifetime relay for subscription connections (ChatGPT/Copilot/Grok):
-	// every change — and every channel reconnect, which may have missed some —
-	// re-reads the key-gated surfaces and pokes the open connection dialogs.
 	const connectionsChanged = useCallback(() => { notifySettingsSaved("keys"); announceConnectionsChanged(); }, []);
 	useServerEvent("connections-changed", connectionsChanged);
 	useServerResync(connectionsChanged);
+	useEffect(() => {
+		const bridge = window.lh?.chatgpt;
+		if (!bridge) return;
+		const off = bridge.onChange(() => notifySettingsSaved("keys"));
+		notifySettingsSaved("keys"); // cover changes missed before this root-lifetime subscription
+		return off;
+	}, []);
 	// Start closed so server and client first-render agree (no hydration
 	// mismatch); the stored value is applied after mount.
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
-	const [drawerOpen, setDrawerOpen] = useState(false);
 	const [mounted, setMounted] = useState(false);
-	const pathname = usePathname();
 
 	useEffect(() => {
+		// Electron shell detection (merged chrome, 2026-09-17): keys the
+		// .lh-electron CSS (app/globals.css) that turns the header bands
+		// into the window's drag surface. Post-mount only — server HTML
+		// and first client render must agree (no hydration mismatch),
+		// and in the plain browser the class never appears.
+		if (IS_ELECTRON) {
+			document.documentElement.classList.add("lh-electron");
+			document.documentElement.dataset.lhPlatform = window.lh?.platform ?? "";
+		}
+
+		// THE ZOOM TRUTH (owner round 7, 2026-10-05): ⌘±/⌘0 zoom the UI
+		// (Electron zoomFactor) while the native traffic lights stay
+		// physical-fixed — the CSS gutter lengths divide by this factor so
+		// their RENDERED size never moves. getZoom covers the first-paint
+		// race; every later change arrives as an lh:zoom push.
+		const setZoomVar = (factor: number) =>
+			document.documentElement.style.setProperty("--lh-zoom", String(factor));
+		const off = window.lh?.onZoom?.(setZoomVar);
+		void window.lh?.getZoom?.().then(setZoomVar);
+
 		const stored = localStorage.getItem(STORAGE_KEY);
 		// Default: open (first run introduces the sidebar).
 		setOpen(stored === null ? true : stored === "1");
-		const media = window.matchMedia(NARROW_QUERY);
-		const onChange = () => { setNarrow(media.matches); setDrawerOpen(false); };
-		onChange();
-		media.addEventListener("change", onChange);
 		setMounted(true);
-		return () => media.removeEventListener("change", onChange);
+		return () => off?.();
 	}, []);
 
-	// Picking a session (or any navigation) puts the drawer away.
-	useEffect(() => { setDrawerOpen(false); }, [pathname]);
+	// Narrow-window auto-close/auto-restore (see SIDEBAR_AUTOCLOSE note):
+	// fires only on actual resizes — a boolean compare, no layout work.
+	// Both this and the mount effect land before the first paint, so a
+	// narrow window never flashes the open sidebar on load.
+	useEffect(() => {
+		if (!IS_ELECTRON) return; // plain-browser tabs open freely
+		const onResize = () => setNarrow(window.innerWidth < SIDEBAR_AUTOCLOSE);
+		onResize();
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, []);
 
 	const toggle = useCallback(() => {
-		if (narrow) { setDrawerOpen((v) => !v); return; }
+		// Opening while narrow (auto-closed, or the user's own closed-at-
+		// narrow): ask the shell to widen to the threshold — the resize
+		// listener flips `narrow` and the sidebar appears. The preference
+		// persists like any other open, so a restart at a narrow width
+		// still auto-restores when widened.
+		if (narrow && !open) {
+			localStorage.setItem(STORAGE_KEY, "0");
+			setOpen(true);
+			window.lh?.expandWindow();
+			return;
+		}
 		setOpen((v) => {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow]);
-	const close = useCallback(() => {
-		if (narrow) setDrawerOpen(false);
-		else toggle();
-	}, [narrow, toggle]);
+	}, [narrow, open]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -110,7 +195,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: narrow ? drawerOpen : open, narrow, toggle, close }}>
+		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
 			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
@@ -134,8 +219,8 @@ export function SidebarToggle() {
 	return (
 		<span
 			className={cn(
-				"sidebar-motion relative flex h-9 shrink-0 overflow-hidden duration-200",
-				open ? "w-0 -mr-3" : "w-9 mr-0",
+				"sidebar-motion lh-no-drag relative flex h-9 shrink-0 overflow-hidden duration-200",
+				open ? "w-0 -mr-3" : "w-9 mr-0 lh-closed-toggle",
 			)}
 		>
 			<Hint label="Open sidebar" action="toggle-sidebar">
@@ -270,6 +355,7 @@ export function SessionRow({
  *  The meta line stays so the row never changes height mid-edit. */
 export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; onCommit: (next: string) => void; onCancel: () => void }) {
 	const [draft, setDraft] = useState(chat.title);
+	const interactions = useOptionalInteractionLayers();
 	const inputRef = useRef<HTMLInputElement | null>(null);
 	useEffect(() => {
 		const el = inputRef.current;
@@ -300,6 +386,8 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 					onKeyDown={(e) => {
 						if (e.key === "Enter") e.currentTarget.blur();
 						if (e.key === "Escape") {
+							if (interactions && !interactions.isElementEligible(e.currentTarget)) return;
+							interactions?.claimEscape(e);
 							e.stopPropagation(); // discard, not also the sidebar/chat chains
 							onCancel();
 						}
@@ -320,15 +408,9 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
 export type SessionKindFilter = "teach" | "all" | "practice";
 const KIND_FILTER_KEY = "lh:session-kind-filter";
 
-/** End this browser's session, then land on the login page. A failed
- * request still navigates there: the gate decides what the page shows. */
-async function signOut() {
-	await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-	window.location.replace("/login");
-}
-
 function SessionsSidebar() {
-	const { open, narrow, toggle, close } = useSidebar();
+	const interactions = useInteractionLayers();
+	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
@@ -357,9 +439,7 @@ function SessionsSidebar() {
 	 * keeps the natural list order (scores are all 0, sort is stable). */
 	const shown = useMemo(() => {
 		const q = query.trim();
-		// Topic conversations (mapping, check-ups) are reached through their
-		// topic, never listed as sessions (topics wave, 2026-10-26).
-		let list = chats?.filter((c) => c.kind !== "topic") ?? null;
+		let list = chats;
 		if (list && kindFilter !== "all") {
 			list = list.filter((c) => (c.kind ?? "teach") === kindFilter);
 		}
@@ -504,24 +584,15 @@ function SessionsSidebar() {
 	useEffect(() => {
 		if (ctxChatId === null) return;
 		const onPointerDown = (e: PointerEvent) => {
+			if (!interactions.isElementEligible(document.querySelector<HTMLElement>('[data-testid="session-context-menu"]'))) return;
 			const target = e.target as Node;
 			if (target instanceof Element && target.closest("[data-lh-menu]")) return;
 			if (ctxAnchorRef.current?.contains(target)) return;
 			setCtxChatId(null);
 		};
-		const onKeyDown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.stopPropagation();
-				setCtxChatId(null);
-			}
-		};
 		document.addEventListener("pointerdown", onPointerDown);
-		document.addEventListener("keydown", onKeyDown);
-		return () => {
-			document.removeEventListener("pointerdown", onPointerDown);
-			document.removeEventListener("keydown", onKeyDown);
-		};
-	}, [ctxChatId]);
+		return () => document.removeEventListener("pointerdown", onPointerDown);
+	}, [ctxChatId, interactions]);
 
 	// Inline rename (owner ruling, wave 6): the row swaps to a text input;
 	// commit rides the SAME plumbing as the header rename — PUT the title,
@@ -562,14 +633,15 @@ function SessionsSidebar() {
 
 	useEffect(() => {
 		const onFocusSearch = () => {
+			if (interactions.getActiveModal() || interactions.getTopLayer()?.kind === "popup") return;
 			if (!open) toggle();
 			// A clipped (overflow-hidden) input still focuses — the sidebar's
 			// slide-in doesn't gate the keystroke.
-			requestAnimationFrame(() => searchRef.current?.focus());
+			requestAnimationFrame(() => { if (isInteractionScopeEligible(searchRef.current, interactions)) searchRef.current?.focus(); });
 		};
 		window.addEventListener("lh:kbd-sessions-search", onFocusSearch);
 		return () => window.removeEventListener("lh:kbd-sessions-search", onFocusSearch);
-	}, [open, toggle]);
+	}, [open, toggle, interactions]);
 
 	// Keep the kbd-selected row in view (the rows are the container's only
 	// buttons, so the index matches).
@@ -586,24 +658,20 @@ function SessionsSidebar() {
 	}, [open, pathname, refresh]);
 
 	return (
-		<>
-		{/* Phone drawer backdrop: a tap outside puts the drawer away. */}
-		{narrow && open && <div className="fixed inset-0 z-30 bg-background/70" aria-hidden="true" data-testid="sidebar-backdrop" onClick={close} />}
 		<aside
-			className={cn(
-				"overflow-hidden duration-200",
-				narrow
-					? cn("fixed inset-y-0 left-0 z-40 w-72 max-w-[85vw] transition-transform", open ? "translate-x-0 shadow-xl" : "-translate-x-full")
-					: cn("sidebar-motion shrink-0", open ? "w-72" : "w-0"),
-			)}
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
 			aria-hidden={!open}
-			data-testid="sessions-sidebar"
 		>
-			<div className="flex h-full w-72 max-w-full flex-col border-r bg-background">
-				{/* LH wordmark — the owner's header; close toggle sits at the edge. */}
-				<div className="flex items-center justify-between px-4 py-3">
+			<div className="flex h-full w-72 flex-col border-r bg-background">
+				{/* LH wordmark — the owner's header; close toggle sits at the edge.
+				    Merged chrome (2026-09-17): in Electron this band is the
+				    window's drag surface and starts after the traffic lights
+				    (.lh-lights-gutter); in the browser those classes are inert. */}
+				<div className="lh-drag lh-lights-gutter flex items-center justify-between px-4 py-3">
 					{/* The owner's mark (2026-09-17) replaces the "LH" text — still the
-					    home link, still vertically centered by the band's items-center. */}
+					    home link, still vertically centered by the band's items-center.
+					    The 92px .lh-lights-gutter keeps it clear of the traffic lights
+					    with the lights' own edge-inset as the gap. */}
 					{/* Hover mirrors the ghost toggle buttons (owner ask, 2026-09-17):
 					    same size-9 chip geometry, same hover:bg-accent treatment. */}
 					<Hint
@@ -618,7 +686,7 @@ function SessionsSidebar() {
 						<Link
 							href="/"
 							aria-label="Home"
-							className="flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
+							className="lh-no-drag flex size-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50"
 						>
 							<LhMark className="size-6" />
 						</Link>
@@ -628,53 +696,41 @@ function SessionsSidebar() {
 							variant="ghost"
 							size="icon"
 							aria-label="Close sidebar"
-							onClick={close}
+							onClick={toggle}
+							className="lh-no-drag"
 						>
 							<PanelLeftCloseIcon className="size-4" />
 						</Button>
 					</Hint>
 				</div>
 
-				{/* Two doors, STACKED (owner round 8, 2026-10-05 — was a
-				    half/half row): full-width rows read cleaner and give the
-				    labels room; teaching keeps the original draft route,
-				    practice carries its mode. */}
-				<div className="mx-3 mb-2 flex flex-col gap-1.5">
+				{/* Core doors always lead explicit plugin sidebar placements. */}
+				<TopicsSection />
+<PluginSidebarActions>
 					<button
 						type="button"
 						data-testid="new-session"
+						title="Teaching"
 						onClick={() => void newSession()}
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
-						<PlusIcon className="size-3" />
-						Teaching
+						<PlusIcon className="size-3 shrink-0" />
+						<span className="min-w-0 truncate">Teaching</span>
 						<span className="sr-only">create a new teaching session</span>
 					</button>
 					<button
 						type="button"
 						data-testid="new-session-practice"
+						title="Practice"
 						onClick={() => router.push("/chat/new?mode=practice")}
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+						className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
-						<DumbbellIcon className="size-3" />
-						Practice
+						<DumbbellIcon className="size-3 shrink-0" />
+						<span className="min-w-0 truncate">Practice</span>
 						<span className="sr-only">create a new practice session</span>
 					</button>
-					{/* Topics (topics wave, 2026-10-26): a learning target mapped
-					    concept by concept — its own door, not a session. */}
-					<button
-						type="button"
-						data-testid="new-topic"
-						onClick={() => router.push("/topic/new")}
-						className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-					>
-						<MapIcon className="size-3" />
-						Topic
-						<span className="sr-only">start a new topic</span>
-					</button>
-				</div>
-
-				<TopicsSection />
+				<button type="button" className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={() => router.push("/topic/new")}>New topic</button>
+				</PluginSidebarActions>
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
 					<span className="text-xs uppercase tracking-widest text-muted-foreground/70">Sessions</span>
@@ -702,6 +758,8 @@ function SessionsSidebar() {
 							// doesn't also fire.
 							onKeyDown={(e) => {
 								if (e.key === "Escape") {
+									if (!interactions.isElementEligible(e.currentTarget)) return;
+									interactions.claimEscape(e);
 									e.stopPropagation();
 									e.currentTarget.blur();
 									return;
@@ -806,7 +864,7 @@ function SessionsSidebar() {
 					{/* Settings entry (settings-app wave): same row language as
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
-					<div className="flex flex-col items-start px-3 pb-3 pt-1">
+					<div className="px-3 pb-3 pt-1">
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
@@ -818,17 +876,6 @@ function SessionsSidebar() {
 								Settings
 							</button>
 						</Hint>
-						{/* Sign out (web host, 2026-10-26): this browser only — same
-						    quiet row language, under Settings. */}
-						<button
-							type="button"
-							onClick={() => void signOut()}
-							data-testid="sign-out"
-							className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-						>
-							<LogOutIcon className="size-3" />
-							Sign out
-						</button>
 					</div>
 				</div>
 
@@ -837,7 +884,7 @@ function SessionsSidebar() {
 				    (owner ruling — no more). MenuShell owns placement/focus/arrow
 				    cycling; the dismissal effect above owns the contract. */}
 				{ctxChatId !== null && (
-					<MenuShell
+					<MenuShell onClose={() => { setCtxChatId(null); return "closed"; }}
 						anchorRef={ctxAnchorRef}
 						testid="session-context-menu"
 						preferredSide="down"
@@ -907,21 +954,26 @@ function SessionsSidebar() {
 					onDeleted={onDeleted}
 				/>
 			</aside>
-		</>
 	);
 }
 
 /** The app frame: sidebar inline + content. Rendered once in the root layout. */
 export function AppShell({ children }: { children: React.ReactNode }) {
+	const [contentRoot, setContentRoot] = useState<HTMLElement | null>(null);
+	const pathname = usePathname();
 	return (
-		<SettingsDialogProvider>
-			<SessionsSidebar />
-			<main className="min-w-0 flex-1">{children}</main>
-			{/* The single document-level keydown listener (keyboard wave A) —
-			    after the content in the tree, but it's window-level so order only
-			    matters for the events it dispatches, never for DOM priority. */}
-			<KeyboardShortcuts />
-			<ChatGPTLimitBanner />
-		</SettingsDialogProvider>
+		<HostRouteLifetimeProvider pathname={pathname}>
+		<HostContentRootContext.Provider value={contentRoot}>
+			<InteractionLayersProvider><SettingsDialogProvider>
+				<SessionsSidebar />
+				<FilePathDropZone className="relative isolate min-w-0 flex-1" onContentRoot={setContentRoot}>{children}</FilePathDropZone>
+				{/* The single document-level keydown listener (keyboard wave A) —
+				    after the content in the tree, but it's window-level so order only
+				    matters for the events it dispatches, never for DOM priority. */}
+				<KeyboardShortcuts />
+				<PluginWidgets /><ChatGPTLimitBanner />
+			</SettingsDialogProvider></InteractionLayersProvider>
+		</HostContentRootContext.Provider>
+		</HostRouteLifetimeProvider>
 	);
 }

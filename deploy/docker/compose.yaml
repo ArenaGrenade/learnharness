@@ -1,0 +1,114 @@
+name: homelab-learnharness
+services:
+  learnharness:
+    image: ${LH_APP_IMAGE:-homelab-learnharness:local}
+    restart: "no"
+    user: "1000:1000"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=${LH_BROWSER_SECCOMP:-./seccomp-browser.json}
+    cap_drop: [ALL]
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 512
+    shm_size: 512m
+    stop_grace_period: 60s
+    environment:
+      LH_AUTH_MODE: ${LH_AUTH_MODE:-cloudflare-access}
+      LH_ALLOWED_HOSTS: ${LH_ALLOWED_HOSTS:?Set the public app hostname}
+      LH_EXECUTION_URL: http://execution-broker:8080
+      LH_EXECUTION_TOKEN: ${EXECUTION_TOKEN:?Set a private random execution token}
+      LH_DATA_DIR: /appdata/data
+      LH_AUTH_FILE: /appdata/auth.json
+      SEARXNG_URL: http://searxng:8080
+      CHROME_PATH: /usr/bin/chromium
+    volumes:
+      - type: bind
+        source: ${LH_APPDATA:?Set the persistent data directory}
+        target: /appdata
+        bind:
+          create_host_path: false
+    network_mode: service:netguard
+    depends_on:
+      netguard:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  netguard:
+    image: homelab-learnharness-netguard:local
+    build: ./network
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    networks:
+      learnharness-edge:
+        aliases: [learnharness]
+      search: {}
+      provider-egress: {}
+      execution: {}
+    depends_on:
+      execution-broker:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, test, -f, /run/ready]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+
+  execution-broker:
+    image: ${LH_BROKER_IMAGE:-homelab-learnharness-execution-broker:local}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/runner/Broker.Dockerfile
+    restart: "no"
+    init: true
+    user: "65534:65534"
+    group_add: ["${DOCKER_GID:?Set the Docker socket group ID}"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 64
+    environment:
+      EXECUTION_IMAGE: ${LH_EXECUTION_IMAGE:-homelab-learnharness-execution:local}
+      EXECUTION_TOKEN: ${EXECUTION_TOKEN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [execution]
+    healthcheck:
+      test: [CMD, python3, -c, "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8080/health',headers={'Authorization':'Bearer '+os.environ['EXECUTION_TOKEN']}); urllib.request.urlopen(r,timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: "3"}
+
+networks:
+  execution:
+    internal: true
+  learnharness-edge:
+    external: true
+    name: homelab-learnharness-edge
+  search:
+    external: true
+    name: homelab-search
+  provider-egress: {}

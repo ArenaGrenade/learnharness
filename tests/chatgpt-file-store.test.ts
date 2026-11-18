@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createChatGPT as createService, fileStore as typedFileStore } from "../src/server/connections/chatgpt.ts";
+import { createChatGPT as createService, fileStore as typedFileStore } from "../src/self-host/connections/chatgpt.ts";
 /** Loose-typed for scratch states (the service validates every record). */
 const createChatGPT = (options: any): any => createService(options);
 const fileStore = (file: string): any => typedFileStore(file);
@@ -119,8 +119,8 @@ test("file read/write failures are sanitized and cannot leak credential or path 
 });
 
 test("server wiring uses only the private JSON path under the credentials directory", async () => {
-	const host = await fs.readFile(new URL("../src/server/connections/host.ts", import.meta.url), "utf8");
-	const auth = await fs.readFile(new URL("../src/server/connections/chatgpt.ts", import.meta.url), "utf8");
+	const host = await fs.readFile(new URL("../src/self-host/connections/host.ts", import.meta.url), "utf8");
+	const auth = await fs.readFile(new URL("../src/self-host/connections/chatgpt.ts", import.meta.url), "utf8");
 	assert.match(host, /store: chatGPTFileStore\(path\.join\(PATHS\.credentials, "chatgpt-credentials\.json"\)\)/);
 	assert.doesNotMatch(host + auth, /safeStorage|encryptedStore|chatgpt-credentials\.enc\.json/);
 });

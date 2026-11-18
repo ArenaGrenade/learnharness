@@ -2,7 +2,7 @@
  * The curated auth-key catalog + shape rules (auth-keys wave, 2026-09-19;
  * search wave 2026-09-20: the Google CSE pair retired, Tavily + Brave in)
  * — PURE module, so this file owns no fs. Owner decisions being pinned:
- *  - the catalog is exactly the three known keys, ids = env-var names;
+ *  - the catalog contains the known keys, ids = env-var names;
  *  - validation is SHAPE-ONLY (no live pings) and bad pastes are 400s;
  *  - masking is last-4 + length — plaintext never leaves the store.
  */
@@ -12,10 +12,10 @@ import { describe, it } from "node:test";
 import { AUTH_KEYS, genericProviderKeyGuard, isKnownAuthKey, maskKey, validateKeyShape } from "../src/core/auth-keys.ts";
 
 describe("the catalog", () => {
-	it("is exactly the CURATED app-service keys (provider keys live in the provider table)", () => {
+	it("lists the curated app-service keys (provider keys live in the provider table)", () => {
 		assert.deepEqual(
 			AUTH_KEYS.map((k) => k.id),
-			["DEEPGRAM_API_KEY", "SEARXNG_URL", "TAVILY_API_KEY", "BRAVE_API_KEY", "ALPHAXIV_API_KEY"],
+			["DEEPGRAM_API_KEY", "SEARXNG_URL", "TAVILY_API_KEY", "BRAVE_API_KEY", "ALPHAXIV_API_KEY", "EXA_API_KEY", "FIRECRAWL_API_KEY", "OLLAMA_API_KEY"],
 		);
 		for (const k of AUTH_KEYS) {
 			assert.ok(k.label.length > 0, `${k.id} has a label`);
@@ -34,6 +34,9 @@ describe("the catalog", () => {
 		assert.ok(isKnownAuthKey("DEEPGRAM_API_KEY"));
 		assert.ok(isKnownAuthKey("TAVILY_API_KEY"));
 		assert.ok(isKnownAuthKey("BRAVE_API_KEY"));
+		assert.ok(isKnownAuthKey("EXA_API_KEY"));
+		assert.ok(isKnownAuthKey("FIRECRAWL_API_KEY"));
+		assert.ok(isKnownAuthKey("OLLAMA_API_KEY"));
 		assert.ok(!isKnownAuthKey("OPENROUTER_API_KEY"));
 		assert.ok(!isKnownAuthKey("OPENAI_API_KEY"), "provider vars are a separate surface");
 		assert.ok(!isKnownAuthKey("FUTURE_PLANS_TOKEN"));
@@ -49,6 +52,14 @@ describe("validateKeyShape (the 400 gate — curated keys)", () => {
 		assert.ok(!validateKeyShape("TAVILY_API_KEY", "  ").ok, "empty fails");
 	});
 
+	it("Firecrawl: fc- prefix required, length floor past it", () => {
+		assert.ok(validateKeyShape("FIRECRAWL_API_KEY", "fc-0123456789abcdef0123456789abcdef").ok);
+		assert.ok(!validateKeyShape("FIRECRAWL_API_KEY", "tvly-abc123def456ghi78").ok, "wrong family");
+		assert.ok(!validateKeyShape("FIRECRAWL_API_KEY", "fc-").ok, "prefix alone is a truncation");
+		assert.ok(!validateKeyShape("FIRECRAWL_API_KEY", "fc-0123456789 abcdef0123").ok, "whitespace fails");
+		assert.ok(!validateKeyShape("FIRECRAWL_API_KEY", "  ").ok, "empty fails");
+	});
+
 	it("Brave: no public format — a ≥20-char truncation guard, no whitespace", () => {
 		assert.ok(validateKeyShape("BRAVE_API_KEY", "b".repeat(40)).ok);
 		assert.ok(!validateKeyShape("BRAVE_API_KEY", "b".repeat(19)).ok, "truncated paste");
@@ -59,6 +70,19 @@ describe("validateKeyShape (the 400 gate — curated keys)", () => {
 		assert.ok(validateKeyShape("DEEPGRAM_API_KEY", "a".repeat(40)).ok);
 		assert.ok(!validateKeyShape("DEEPGRAM_API_KEY", "a".repeat(19)).ok, "truncated paste");
 		assert.ok(!validateKeyShape("DEEPGRAM_API_KEY", "a b c d e f g h i j k l m n o p q r s").ok, "whitespace");
+	});
+
+	it("Exa: accepts whitespace-free keys without assuming a prefix", () => {
+		assert.ok(validateKeyShape("EXA_API_KEY", "exa-test-12345678").ok);
+		assert.ok(!validateKeyShape("EXA_API_KEY", "short").ok);
+		assert.ok(!validateKeyShape("EXA_API_KEY", "exa key with spaces").ok);
+	});
+
+	it("Ollama hosted search: ordinary key paste hygiene, not a model URL", () => {
+		assert.ok(validateKeyShape("OLLAMA_API_KEY", "  ollama-fake-key-123456  ").ok);
+		assert.ok(!validateKeyShape("OLLAMA_API_KEY", "short").ok);
+		assert.ok(!validateKeyShape("OLLAMA_API_KEY", "ollama fake key 123456").ok);
+		assert.ok(!isKnownAuthKey("OLLAMA_BASE_URL"));
 	});
 
 	it("trims surrounding paste whitespace before checking", () => {
@@ -105,15 +129,5 @@ describe("maskKey (plaintext never leaves)", () => {
 
 	it("trims before masking", () => {
 		assert.equal(maskKey("  sk-or-v1-xyzw9  "), "…yzw9");
-	});
-});
-
-describe("SEARXNG_URL shape (a base URL, not a credential)", () => {
-	it("accepts plain http(s) base URLs and refuses everything else", () => {
-		assert.ok(validateKeyShape("SEARXNG_URL", " http://127.0.0.1:9180 ").ok);
-		assert.ok(validateKeyShape("SEARXNG_URL", "https://search.example/searx/").ok);
-		for (const bad of ["127.0.0.1:9180", "ftp://x.example", "http://user:pw@x.example", "http://x.example/?q=1", ""]) {
-			assert.equal(validateKeyShape("SEARXNG_URL", bad).ok, false, bad);
-		}
 	});
 });

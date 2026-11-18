@@ -1,0 +1,13 @@
+.git
+.next
+dist
+data
+auth.json
+.env*
+**/node_modules
+**/.sdk
+**/chatgpt-credentials.json*
+**/github-copilot-credentials.json*
+**/xai-credentials.json*
+**/*.pem
+**/*.key
