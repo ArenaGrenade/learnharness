@@ -9,6 +9,7 @@
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
  }
+ .app-frame .sidebar-motion { transition-property: none; }
  .app-content { max-width: 100%; min-height: 0; }
  .app-content .h-dvh { height: calc(var(--mobile-viewport-height, 100dvh) - env(safe-area-inset-top)); }
  .mobile-sidebar-backdrop { height: var(--mobile-viewport-height, 100dvh); }
