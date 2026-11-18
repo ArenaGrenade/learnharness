@@ -9,6 +9,12 @@ future upgrades unnecessarily difficult. Desktop packaging is not our deployment
 
 Local boundaries:
 
+- `app/mobile.css` scopes the phone layout below 768px. Sidebar and Settings
+  use the shared interaction owner for the mobile drawer and dialog; desktop
+  preferences and layouts stay intact. `deploy/docker/smoke-mobile.mjs` checks
+  phone/landscape/desktop widths, touch scrolling and visual keyboard height
+  against disposable data.
+
 - `deploy/docker/`: source-only builds, standalone runtime, Compose, Chromium
   sandbox policy, network guard and separate execution broker/job images.
 - `src/self-host/`: authentication, remote-browser ChatGPT paste-back, subscription

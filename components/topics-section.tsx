@@ -21,8 +21,7 @@ export function useTopics(): TopicRecord[] | null {
 	return topics;
 }
 
-export function TopicsSection() {
-	const topics = useTopics();
+export function TopicsSection({ topics }: { topics: TopicRecord[] | null }) {
 	const pathname = usePathname();
 	if (!topics?.length) return null;
 	return (

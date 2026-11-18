@@ -1,0 +1,80 @@
+/* Web hosting adaptations stay scoped to phones; desktop layout is upstream's. */
+@media (max-width: 767px) {
+ .app-frame {
+  height: var(--mobile-viewport-height, 100dvh);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+ }
+ .app-content { max-width: 100%; min-height: 0; }
+ .app-content .h-dvh { height: calc(var(--mobile-viewport-height, 100dvh) - env(safe-area-inset-top)); }
+ .mobile-sidebar-backdrop { height: var(--mobile-viewport-height, 100dvh); }
+ .mobile-sidebar {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+ }
+ .mobile-sidebar > div { width: 100%; overflow-y: auto; overscroll-behavior: contain; }
+ .mobile-sidebar [data-testid="sidebar-actions"] { max-height: none; overflow: visible; }
+ .mobile-sidebar > div > .flex-1 { flex: 1 0 auto; overflow: visible; }
+ .mobile-sidebar-footer { position: sticky; bottom: 0; z-index: 1; background: var(--background); }
+ .mobile-sidebar .lh-lights-gutter { position: sticky; top: 0; z-index: 1; background: var(--background); }
+ .mobile-sidebar :is(button, a), [aria-label="Open sidebar"] {
+  min-height: 44px;
+  touch-action: manipulation;
+ }
+ .mobile-sidebar [aria-label="Close sidebar"], [aria-label="Open sidebar"] { min-width: 44px; }
+ .lh-closed-toggle { width: 44px; height: 44px; }
+ .mobile-what-next { top: 72px; }
+ .mobile-home-tools button { min-height: 44px; }
+ .mobile-composer-inset { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+ .mobile-home-tools { flex-wrap: wrap; justify-content: flex-end; }
+ .app-content .lh-input, .mobile-sidebar input,
+ [data-testid="settings-dialog"] :is(input, select, textarea) { font-size: 16px; }
+ [data-attachment-composer] { min-width: 0; }
+ [data-attachment-composer] .lh-input { min-width: 0; }
+ [data-testid="stats-bar"] { flex-wrap: wrap; gap: 8px; padding-left: 0; padding-right: 0; }
+ [data-testid="stats-bar"] > * { max-width: 100%; }
+ [data-testid="stats-bar"] :is(button, a) { min-height: 44px; touch-action: manipulation; }
+ [data-testid="model-control"] { min-width: 0; max-width: 100%; margin-left: auto; }
+ [data-testid="model-control"] > button { min-width: 0; }
+ [data-testid="stats-model"] > span:first-child {
+  max-width: min(11rem, 45vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+ }
+ [data-testid="stats-detail"] { max-width: calc(100vw - 32px); left: 0; transform: none; }
+ [data-testid="settings-backdrop"] { height: var(--mobile-viewport-height, 100dvh); bottom: auto; }
+ .settings-dialog-pop { max-width: calc(100vw - 16px); max-height: calc(var(--mobile-viewport-height, 100dvh) - 16px); }
+ [data-testid="settings-dialog"] {
+  width: calc(100vw - 16px);
+  max-width: calc(100vw - 16px);
+  height: calc(var(--mobile-viewport-height, 100dvh) - 16px);
+  max-height: calc(var(--mobile-viewport-height, 100dvh) - 16px);
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+ }
+ [data-testid="settings-dialog"] header { padding-left: 16px; padding-right: 8px; }
+ [data-testid="settings-nav"] { display: none; }
+ .settings-mobile-nav { display: flex; }
+ [data-testid="settings-content"] { overscroll-behavior: contain; overflow-x: hidden; }
+ [data-testid="settings-content"] :is(input, select) { max-width: 100%; }
+ [data-testid="settings-dialog"] button:not([role="switch"]) { min-height: 44px; touch-action: manipulation; }
+ [data-testid="settings-close"] { min-width: 44px; }
+ [data-testid="settings-dialog"] [role="switch"] { margin-block: 13px; }
+ [data-testid="settings-dialog"] [role="switch"]::after {
+  content: "";
+  position: absolute;
+  inset: -13px -6px;
+ }
+ [data-testid="group-colors"] > .grid { grid-template-columns: minmax(0, 1fr); }
+ [data-testid="settings-content"] .flex > * { min-width: 0; max-width: 100%; }
+ [data-testid="settings-content"] .flex:not(.flex-col) { flex-wrap: wrap; }
+ [data-testid="question-prompt"], [data-testid="question-options"] { overscroll-behavior: contain; }
+ [data-testid="question-prompt"] { max-height: calc(var(--mobile-viewport-height, 100dvh) * 0.3); }
+ [data-testid="question-options"] { max-height: min(var(--dock-options-max-h, 40dvh), calc(var(--mobile-viewport-height, 100dvh) * 0.35)); }
+ [data-testid="question-options"] :is(button, [role="radio"]) { min-height: 44px; }
+}

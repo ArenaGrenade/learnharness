@@ -381,6 +381,15 @@ export function SettingsDialogBody({
 					</Hint>
 			</header>
 
+   <label className="settings-mobile-nav hidden items-center gap-3 border-b border-border px-4 py-2 text-sm">
+    <span>Section</span>
+    <select aria-label="Settings section" data-testid="settings-mobile-section" value={selected}
+     onChange={event => setActive(event.target.value as SectionId)}
+     className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2">
+     {navSections.map(section => <option key={section.id} value={section.id}>{section.label}</option>)}
+    </select>
+   </label>
+
 			<div className="flex min-h-0 flex-1">
 				{/* Left nav — mono labels and theme-inherited decorative icons,
 					    active = bg-accent. */}

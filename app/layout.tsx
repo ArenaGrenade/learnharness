@@ -3,6 +3,7 @@ import { JetBrains_Mono, Source_Sans_3 } from "next/font/google";
 import { connection } from "next/server";
 import "katex/dist/katex.min.css";
 import "./globals.css";
+import "./mobile.css";
 import { AppearanceProvider } from "@/components/settings/appearance";
 import { readThemeBoot } from "@/src/server";
 

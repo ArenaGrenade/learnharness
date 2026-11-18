@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { MenuShell } from "@/components/menu-shell";
 import { DeleteSessionDialog } from "@/components/delete-session-dialog";
 import { announceConnectionsChanged } from "./connection-bridges";
-import { TopicsSection } from "./topics-section";
+import { TopicsSection, useTopics } from "./topics-section";
 import { ChatGPTLimitBanner } from "./chatgpt-limit-banner";
 import type { ChatDeleteMode, ThemeMode } from "@/src/core";
 import { DumbbellIcon, PanelLeftCloseIcon, PanelLeftOpenIcon, PlusIcon, SearchIcon, SettingsIcon } from "lucide-react";
@@ -32,10 +32,9 @@ import { isInteractionScopeEligible } from "@/components/plugin-input-focus";
 import { InteractionLayersProvider, useInteractionLayers, useOptionalInteractionLayers } from "@/components/interaction-layers";
 
 /**
- * Toggleable sidebar — NOT a modal drawer: no backdrop, no focus theft. It
- * sits inline next to the content and can stay open while working in a
- * session. Open state persists across pages (provider lives in the root
- * layout) and across reloads (localStorage).
+ * Desktop sidebar stays inline and retains its stored preference. Below
+ * 768px navigation uses a transient modal drawer, leaving the content at
+ * full width. The shared dialog owner handles focus, Escape and backdrop.
  */
 
 const STORAGE_KEY = "lh:sidebar-open";
@@ -58,6 +57,7 @@ const STORAGE_KEY = "lh:sidebar-open";
  */
 import type { ChatGPTControlBridge, NativeSubscriptionControlBridge } from "@/src/core";
 import type { UpdateState } from "@/components/settings/update-settings.tsx";
+import { HostDialog } from "./host-dialog";
 import { FilePathDropZone } from "@/components/file-path-drop-zone";
 const SIDEBAR_AUTOCLOSE = 928;
 
@@ -97,9 +97,9 @@ declare global {
 	}
 }
 
-const SidebarContext = createContext<{ open: boolean; toggle: () => void }>({
-	open: false,
-	toggle: () => {},
+const SidebarContext = createContext<{ open: boolean; mobile: boolean; toggle: () => void; closeMobile: () => void }>({
+	open: false, mobile: false,
+	toggle: () => {}, closeMobile: () => {},
 });
 
 export function useSidebar() {
@@ -122,6 +122,34 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [narrow, setNarrow] = useState(false);
 	const [mounted, setMounted] = useState(false);
+ const [mobile, setMobile] = useState(false);
+ const [mobileOpen, setMobileOpen] = useState(false);
+ const pathname = usePathname();
+ const closeMobile = useCallback(() => setMobileOpen(false), []);
+ useEffect(() => { closeMobile(); }, [pathname, closeMobile]);
+ useEffect(() => {
+  let previousMobile = window.innerWidth < 768;
+  const update = () => {
+   const next = window.innerWidth < 768;
+   if (next !== previousMobile) setMobileOpen(false);
+   previousMobile = next;
+   setMobile(next);
+  };
+  const viewport = () => {
+   if (window.visualViewport && Math.abs(window.visualViewport.scale - 1) > 0.01) return;
+   document.documentElement.style.setProperty("--mobile-viewport-height", `${window.visualViewport?.height ?? window.innerHeight}px`);
+  };
+  update(); viewport();
+  window.addEventListener("resize", update);
+  window.addEventListener("resize", viewport);
+  window.visualViewport?.addEventListener("resize", viewport);
+  return () => {
+   window.removeEventListener("resize", update);
+   window.removeEventListener("resize", viewport);
+   window.visualViewport?.removeEventListener("resize", viewport);
+   document.documentElement.style.removeProperty("--mobile-viewport-height");
+  };
+ }, []);
 
 	useEffect(() => {
 		// Electron shell detection (merged chrome, 2026-09-17): keys the
@@ -164,6 +192,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, []);
 
 	const toggle = useCallback(() => {
+        if (mobile) { setMobileOpen(value => !value); return; }
 		// Opening while narrow (auto-closed, or the user's own closed-at-
 		// narrow): ask the shell to widen to the threshold — the resize
 		// listener flips `narrow` and the sidebar appears. The preference
@@ -179,7 +208,7 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 			localStorage.setItem(STORAGE_KEY, v ? "0" : "1");
 			return !v;
 		});
-	}, [narrow, open]);
+	}, [narrow, open, mobile]);
 
 	// ⌘B: the global shortcut dispatches kbdEventForAction("toggle-sidebar")
 	// and the context answers on exactly that name — the shared spelling
@@ -195,9 +224,9 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
 	}, [toggle]);
 
 	return (
-		<SidebarContext.Provider value={{ open: open && !narrow, toggle }}>
+		<SidebarContext.Provider value={{ open: mobile ? mobileOpen : open && !narrow, mobile, toggle, closeMobile }}>
 			{/* transitions gated on mount: no slide-in flash on page load */}
-			<div className={cn("flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
+			<div className={cn("app-frame flex h-dvh", mounted && "[&_.sidebar-motion]:transition-[width,margin,opacity]")}>{children}</div>
 		</SidebarContext.Provider>
 	);
 }
@@ -410,7 +439,9 @@ const KIND_FILTER_KEY = "lh:session-kind-filter";
 
 function SessionsSidebar() {
 	const interactions = useInteractionLayers();
-	const { open, toggle } = useSidebar();
+	const { open, mobile, toggle, closeMobile } = useSidebar();
+ const drawerCloseRef = useRef<HTMLButtonElement>(null);
+ const topics = useTopics(); // Keep navigation data mounted while the phone drawer is closed.
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
@@ -424,6 +455,7 @@ function SessionsSidebar() {
 	}, []);
 	const pathname = usePathname();
 	const router = useRouter();
+ const navigate = useCallback((href: string) => { closeMobile(); router.push(href); }, [router, closeMobile]);
 	const { open: openSettings } = useSettingsDialog();
 
 	/* New session (owner, 2026-09-13): NO POST — the button opens the
@@ -431,8 +463,8 @@ function SessionsSidebar() {
 	   message is sent (and that message becomes its title). Search: a
 	   client-side filter over the poll snapshot — no server round trip. */
 	const newSession = useCallback(() => {
-		router.push("/chat/new");
-	}, [router]);
+		navigate("/chat/new");
+	}, [navigate]);
 
 	/* FUZZY (owner round 8, 2026-10-05): subsequence match ranked by
 	 * fuzzyScore — prefix beats word-boundary beats scattered. Empty query
@@ -625,7 +657,7 @@ function SessionsSidebar() {
 		(id: string, _mode: ChatDeleteMode, graphRevision: number) => {
 			setDeleting(null);
 			setChats((prev) => (prev ? prev.filter((c) => c.id !== id) : prev));
-			if (pathname === `/chat/${id}`) router.push("/");
+			if (pathname === `/chat/${id}`) navigate("/");
 			window.dispatchEvent(new CustomEvent("lh:graph-revision", { detail: { revision: graphRevision } }));
 		},
 		[pathname, router],
@@ -657,9 +689,12 @@ function SessionsSidebar() {
 		// freshness (S6) — no interval, nothing standing.
 	}, [open, pathname, refresh]);
 
-	return (
+	const frame = (
 		<aside
-			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", open ? "w-72" : "w-0")}
+			className={cn("sidebar-motion shrink-0 overflow-hidden duration-200", mobile ? "mobile-sidebar h-full w-72 max-w-[calc(100vw-2rem)]" : open ? "w-72" : "w-0")}
+   data-testid={mobile ? "mobile-sidebar" : "desktop-sidebar"}
+   aria-busy={mobile && (chats === null || topics === null) || undefined}
+   onClick={(event) => { if (mobile && (event.target as Element).closest("a[href]")) closeMobile(); }}
 			aria-hidden={!open}
 		>
 			<div className="flex h-full w-72 flex-col border-r bg-background">
@@ -696,6 +731,7 @@ function SessionsSidebar() {
 							variant="ghost"
 							size="icon"
 							aria-label="Close sidebar"
+                            ref={drawerCloseRef}
 							onClick={toggle}
 							className="lh-no-drag"
 						>
@@ -705,7 +741,7 @@ function SessionsSidebar() {
 				</div>
 
 				{/* Core doors always lead explicit plugin sidebar placements. */}
-				<TopicsSection />
+				<TopicsSection topics={topics} />
 <PluginSidebarActions>
 					<button
 						type="button"
@@ -722,14 +758,14 @@ function SessionsSidebar() {
 						type="button"
 						data-testid="new-session-practice"
 						title="Practice"
-						onClick={() => router.push("/chat/new?mode=practice")}
+						onClick={() => navigate("/chat/new?mode=practice")}
 						className="flex min-w-0 w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
 						<DumbbellIcon className="size-3 shrink-0" />
 						<span className="min-w-0 truncate">Practice</span>
 						<span className="sr-only">create a new practice session</span>
 					</button>
-				<button type="button" className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={() => router.push("/topic/new")}>New topic</button>
+				<button type="button" className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent" onClick={() => navigate("/topic/new")}>New topic</button>
 				</PluginSidebarActions>
 
 				<div className="mx-3 mb-2 flex items-center gap-2">
@@ -781,7 +817,7 @@ function SessionsSidebar() {
 									const target = shown![kbdIndex !== null && kbdIndex < n ? kbdIndex : 0];
 									if (!target) return;
 									e.preventDefault();
-									router.push(`/chat/${target.id}`);
+									navigate(`/chat/${target.id}`);
 									setKbdIndex(null);
 									e.currentTarget.blur();
 								}
@@ -845,7 +881,7 @@ function SessionsSidebar() {
 									kbdSelected={i === kbdIndex}
 									onOpen={() => {
 										setKbdIndex(null);
-										router.push(`/chat/${c.id}`);
+										navigate(`/chat/${c.id}`);
 									}}
 									onContextMenu={(e) => openContext(e, c)}
 								/>
@@ -864,11 +900,11 @@ function SessionsSidebar() {
 					{/* Settings entry (settings-app wave): same row language as
 					    New session — quiet, bottom-pinned, opens the centered
 					    dialog (also mod+, in the keyboard registry). */}
-					<div className="px-3 pb-3 pt-1">
+					<div className="mobile-sidebar-footer px-3 pb-3 pt-1">
 						<Hint label="Settings" action="open-settings" side="right">
 							<button
 								type="button"
-								onClick={() => openSettings()}
+								onClick={() => { closeMobile(); openSettings(); }}
 								data-testid="settings-entry"
 								className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 							>
@@ -955,6 +991,12 @@ function SessionsSidebar() {
 				/>
 			</aside>
 	);
+ return mobile ? <HostDialog open={open} onClose={() => { closeMobile(); return "closed"; }}
+  aria-label="Navigation" initialFocusRef={drawerCloseRef} frame={frame}
+  backdropProps={{className: "mobile-sidebar-backdrop fixed inset-0 bg-background/70", "data-testid": "mobile-sidebar-backdrop"}}>
+  {frame.props.children}
+ </HostDialog> : frame;
+
 }
 
 /** The app frame: sidebar inline + content. Rendered once in the root layout. */
@@ -966,7 +1008,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 		<HostContentRootContext.Provider value={contentRoot}>
 			<InteractionLayersProvider><SettingsDialogProvider>
 				<SessionsSidebar />
-				<FilePathDropZone className="relative isolate min-w-0 flex-1" onContentRoot={setContentRoot}>{children}</FilePathDropZone>
+				<FilePathDropZone className="app-content relative isolate min-w-0 flex-1" onContentRoot={setContentRoot}>{children}</FilePathDropZone>
 				{/* The single document-level keydown listener (keyboard wave A) —
 				    after the content in the tree, but it's window-level so order only
 				    matters for the events it dispatches, never for DOM priority. */}

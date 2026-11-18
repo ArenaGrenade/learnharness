@@ -69,6 +69,11 @@ export function syncDockHeight(elements: DockHeightElements, expanded: boolean) 
 			? pixels(questionStyle.paddingTop) + pixels(questionStyle.paddingBottom)
 			: 0,
 	});
+ // Phones retain an inner options scroller even when a short keyboard viewport
+ // requires the outer content to scroll. Keep this numeric: CSS min(none, …)
+ // would invalidate the cap and expand a long options list without a limit.
+ if (budget.questionMaxHeight === null) block.style.removeProperty("--dock-options-max-h");
+ else block.style.setProperty("--dock-options-max-h", `${Math.max(44, budget.questionMaxHeight)}px`);
 	if (budget.questionMaxHeight === null) block.style.removeProperty("--dock-max-h");
 	else block.style.setProperty("--dock-max-h", budget.scrollWholeContent ? "none" : `${budget.questionMaxHeight}px`);
 	viewport.style.maxHeight = `${budget.viewportMaxHeight}px`;

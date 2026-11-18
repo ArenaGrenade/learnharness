@@ -53,3 +53,11 @@ mix a pre-upgrade image with data that the new app has modified.
 then snapshots images/configuration and the stopped profile before replacement.
 Use `--skip-build` only for already validated image tags. A failed replacement
 retains the snapshot for rollback; inspect the failure before restoring it.
+
+For responsive UI validation, copy `smoke-mobile.mjs` into a disposable candidate
+container and run it with `LH_DATA_DIR` under `/tmp`. It refuses live profiles.
+The gate exercises 320/390/430px phones, 740px landscape and 1280px desktop,
+including touch scrolling, navigation, all settings sections, long labels,
+question/options scrolling and a reduced visual viewport. `LH_EVIDENCE` selects
+the screenshot/result directory. It injects display-only account/model fixtures,
+never sends model requests, and removes its synthetic chat afterward.
